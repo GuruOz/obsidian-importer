@@ -1,8 +1,10 @@
 # Copilot Digest → Obsidian Vault Pipeline
 
 Nightly pipeline: pulls the M365 Copilot work-summary email from a personal Outlook/
-Hotmail inbox via Microsoft Graph, stages it as markdown, and invokes headless Claude
-Code to split it into atomic entries and file them into an Obsidian vault.
+Hotmail inbox via Microsoft Graph, stages it as markdown, and invokes an autonomous
+tool-calling agent (`scripts/custom_agent_loop.py`, works with any OpenAI-compatible
+API such as DeepSeek or OpenRouter) to split it into atomic entries and file them into
+an Obsidian vault.
 
 ## Architecture
 
@@ -21,7 +23,7 @@ Two deployment modes, chosen by which service(s) you start:
 
 `pipeline` runs `supercronic` continuously, firing `scripts/run-digest.sh` at 21:30
 Asia/Singapore daily. Pipeline state (staging, logs, backups, ledger, MSAL token
-cache, Claude Code home) lives in `./data`, bind-mounted so you can inspect it from
+cache) lives in `./data`, bind-mounted so you can inspect it from
 the host.
 
 ## One-time setup
@@ -57,7 +59,7 @@ cp .env.example .env
 
 Fill in `GRAPH_CLIENT_ID` (from step 1), `DIGEST_FROM`, `DIGEST_SUBJECT_PATTERN`,
 `NTFY_TOPIC` (any secret ntfy.sh topic name — subscribe to it in the ntfy phone app),
-and `CLAUDE_CODE_OAUTH_TOKEN` (see step 4). Leave `DRY_RUN=1` until milestone M5.
+and the agent endpoint (see step 4). Leave `DRY_RUN=1` until milestone M5.
 
 ### 3. Start the pipeline
 
@@ -69,17 +71,23 @@ docker compose up -d pipeline
 `docker compose --profile headless-server up -d` instead, then open
 http://localhost:3000 to log into Obsidian Sync once - see the Architecture section.)
 
-### 4. Generate a Claude Code OAuth token
+### 4. Configure the agent endpoint
 
-Interactive login doesn't work in headless `-p` mode, so generate a long-lived token
-once, on any machine with the Claude Code CLI:
+Set the three `LLM_*` variables in `.env` to any OpenAI-compatible chat-completions
+endpoint with tool-calling support, e.g.:
 
 ```
-claude setup-token
+# DeepSeek
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=sk-...
+LLM_MODEL=deepseek-chat
+
+# or OpenRouter
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=<provider/model>
 ```
 
-Paste the resulting token into `.env` as `CLAUDE_CODE_OAUTH_TOKEN`, then
-`docker compose up -d` again to pick it up.
+Then `docker compose up -d` again to pick the changes up.
 
 ### 5. Authenticate Microsoft Graph
 
@@ -98,10 +106,8 @@ Follow the printed device-code URL to sign in once. The refresh token is cached 
    `docker compose exec pipeline python3 scripts/fetch_digest.py`. Confirm
    `data/staging/digest.md` looks right and the ledger (`data/processed_ids.txt`)
    updated. Also confirm the "no digest" path exits 20 on a second run.
-3. **M2 — Conventions.** Copy `vault-seed/CLAUDE.md` into the vault root (via the
-   Obsidian GUI, or `docker compose exec pipeline cp vault-seed/CLAUDE.md /vault/`).
-   Then run the **vault profiler** to generate `Filing_Rules.md` (see below), and
-   hand-refine both files.
+3. **M2 — Conventions.** Run the **vault profiler** to generate `Filing_Rules.md` at
+   the vault root (see below), and hand-refine it.
 4. **M3 — Agent dry-run.** With `DRY_RUN=1` (default), run
    `docker compose exec pipeline scripts/run-digest.sh` and review
    `data/staging/proposed.md` against real digests for a couple of weeks.
@@ -115,16 +121,16 @@ Follow the printed device-code URL to sign in once. The refresh token is cached 
 
 `scripts/profile_vault.py` traverses the vault, maps the folder tree, takes a
 stratified random sample of markdown files (a few per folder, capped in total), and
-stages that profile. It then invokes headless Claude Code — using the same
-subscription OAuth token as the nightly filing step, **not** a pay-per-token API
-call — to synthesize `Filing_Rules.md` at the vault root: the folder taxonomy,
-daily-note format, tag vocabulary, linking style, and create-vs-update rule, inferred
-from what's actually in the vault. `CLAUDE.md` keeps the durable process rules
-(append-only discipline, idempotency marker); `Filing_Rules.md` holds the regenerable
-structural facts, and the nightly prompts are told to read both.
+stages that profile. It then invokes the agent loop (same `LLM_*` endpoint as the
+nightly filing step) to synthesize `Filing_Rules.md` at the vault root: the folder
+taxonomy, daily-note format, tag vocabulary, linking style, and create-vs-update rule,
+inferred from what's actually in the vault. The durable process rules (append-only
+discipline, idempotency marker) live in the nightly prompt templates;
+`Filing_Rules.md` holds the regenerable structural facts and is injected into the
+agent's system prompt on every run.
 
 ```
-# Just inspect the sampled profile first, no Claude call, no cost:
+# Just inspect the sampled profile first, no LLM call, no cost:
 docker compose run --rm pipeline python3 scripts/profile_vault.py --profile-only
 
 # Generate Filing_Rules.md for real:
@@ -134,9 +140,9 @@ docker compose run --rm pipeline python3 scripts/profile_vault.py
 docker compose run --rm pipeline python3 scripts/profile_vault.py --force
 ```
 
-Tuning flags: `--samples-per-folder` (default 3), `--max-samples` (default 40),
+Tuning flags: `--samples-per-folder` (default 3), `--max-samples` (default 60),
 `--max-chars-per-file` (default 800) — raise these for a more thorough profile at the
-cost of a larger prompt (and more subscription usage) on that one run.
+cost of a larger prompt (and more token usage) on that one run.
 
 ## Operational notes
 
@@ -152,16 +158,16 @@ cost of a larger prompt (and more subscription usage) on that one run.
   isn't already up).
 - **Idempotency:** two independent layers — the `internetMessageId` ledger
   (`data/processed_ids.txt`) prevents re-ingesting the same email, and the
-  `<!-- copilot-digest:YYYY-MM-DD -->` marker in each daily note prevents Claude from
-  re-filing the same day twice, even on a manual re-run.
+  `<!-- copilot-digest:YYYY-MM-DD -->` marker in each daily note prevents the agent
+  from re-filing the same day twice, even on a manual re-run.
 - **Mailbox is never modified:** the Graph app has `Mail.Read` only. Inbox tidiness
   comes from your Outlook.com rule moving digests into the `DIGEST_FOLDER`.
-- **Cost controls:** the nightly Claude run's cost scales with the digest's entry
-  count. Three levers keep it down: `run-digest.sh` pre-builds
-  `staging/vault_index.txt` (a complete note-path list) so Claude shortlists
-  create-vs-update candidates by title instead of searching the vault turn by turn;
-  the prompts demand concise output; and `CLAUDE_MAX_BUDGET_USD` hard-caps the spend.
-  `CLAUDE_EFFORT=medium` is a further optional lever once placement quality is proven.
+- **Cost controls:** the nightly run's cost scales with the digest's entry count.
+  The levers that keep it down: `run-digest.sh` pre-builds `staging/vault_index.txt`
+  (a complete note-path list) so the agent shortlists create-vs-update candidates by
+  title instead of searching the vault turn by turn; the prompts demand concise
+  output; the agent loop hard-stops after 30 tool-calling iterations; and `LLM_MODEL`
+  lets you pick a cheap model (e.g. DeepSeek) in the first place.
 - **Backups are incremental:** each day's snapshot hard-links unchanged files against
   the previous day's (rsync `--link-dest`), so 14 retained days cost roughly one full
   copy plus deltas. On filesystems without hard-link support it silently degrades to

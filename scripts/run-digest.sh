@@ -12,8 +12,6 @@ LOG_DIR="${LOG_DIR:-/work/logs}"
 STAGING_DIR="${STAGING_DIR:-/work/staging}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 DRY_RUN="${DRY_RUN:-1}"
-CLAUDE_MAX_BUDGET_USD="${CLAUDE_MAX_BUDGET_USD:-1.50}"
-AGENT_ENGINE="${AGENT_ENGINE:-claude}"
 
 mkdir -p "$LOG_DIR" "$STAGING_DIR" "$WORKDIR/backups"
 
@@ -79,19 +77,16 @@ fi
 # --- Agent filing step ---
 if [ "$DRY_RUN" = "1" ]; then
     PROMPT_FILE="/app/prompt_dry_run.txt"
-    # No Edit in dry-run: Write is needed only for staging/proposed.md
-    ALLOWED_TOOLS="Read,Glob,Grep,Write"
-    # Remove any stale proposal: Agent's overwrite protection blocks writing a
-    # pre-existing file the session hasn't read, which cost a whole failed run once.
+    # Remove any stale proposal so its existence after the run proves it was
+    # freshly written by tonight's agent.
     rm -f "${STAGING_DIR}/proposed.md"
 else
     PROMPT_FILE="/app/prompt_template.txt"
-    ALLOWED_TOOLS="Read,Glob,Grep,Edit,Write"
 fi
 
 AGENT_LOG="${LOG_DIR}/agent.${TODAY}.json"
 
-# Pre-build a complete index of vault note paths. Claude uses it to shortlist
+# Pre-build a complete index of vault note paths. The agent uses it to shortlist
 # create-vs-update candidates by title in one read, instead of burning turns (and
 # tokens) on exploratory vault-wide searches - cheaper AND more complete coverage.
 # Attachments (OneNote-import artifacts) and smart-chats are never filing targets.
@@ -101,36 +96,11 @@ AGENT_LOG="${LOG_DIR}/agent.${TODAY}.json"
     -not -path './smart-chats/*' \
     | sed 's|^\./||' | sort) > "${STAGING_DIR}/vault_index.txt"
 
-if [ "$AGENT_ENGINE" = "custom" ]; then
-    log "Invoking Custom Agent (LLM_MODEL: ${LLM_MODEL:-unknown})..."
-    set +e
-    python3 "/app/scripts/custom_agent_loop.py" "$PROMPT_FILE" > "$AGENT_LOG" 2>&1
-    AGENT_RC=$?
-    set -e
-else
-    # --add-dir: digest.md (and proposed.md in dry-run) live outside the vault cwd
-    CLAUDE_ARGS=(-p "$(cat "$PROMPT_FILE")"
-        --allowedTools "$ALLOWED_TOOLS"
-        --add-dir "$STAGING_DIR"
-        --max-budget-usd "$CLAUDE_MAX_BUDGET_USD"
-        --output-format json)
-
-    if [ -n "${CLAUDE_MODEL:-}" ]; then
-        CLAUDE_ARGS+=(--model "$CLAUDE_MODEL")
-    fi
-    if [ -n "${CLAUDE_FALLBACK_MODEL:-}" ]; then
-        CLAUDE_ARGS+=(--fallback-model "$CLAUDE_FALLBACK_MODEL")
-    fi
-    if [ -n "${CLAUDE_EFFORT:-}" ]; then
-        CLAUDE_ARGS+=(--effort "$CLAUDE_EFFORT")
-    fi
-
-    log "Invoking Claude Code Agent..."
-    set +e
-    (cd "$VAULT_DIR" && claude "${CLAUDE_ARGS[@]}") > "$AGENT_LOG" 2>&1
-    AGENT_RC=$?
-    set -e
-fi
+log "Invoking agent (LLM_MODEL: ${LLM_MODEL:-unknown})..."
+set +e
+python3 "/app/scripts/custom_agent_loop.py" "$PROMPT_FILE" > "$AGENT_LOG" 2>&1
+AGENT_RC=$?
+set -e
 
 if [ "$AGENT_RC" -ne 0 ]; then
     log "ERROR: Agent exited $AGENT_RC, see $AGENT_LOG"
@@ -138,27 +108,24 @@ if [ "$AGENT_RC" -ne 0 ]; then
     exit 1
 fi
 
-COST="$(grep -Eo '"total_cost_usd"[[:space:]]*:[[:space:]]*[0-9.]*' "$AGENT_LOG" | head -1 | awk -F: '{print $2}' | tr -d ' ')"
-COST="${COST:-unknown}"
-
 if [ "$DRY_RUN" = "1" ]; then
     # Don't trust the exit code alone - verify the deliverable actually landed
     # (we deleted any stale copy above, so existence means freshly written).
     if [ ! -s "${STAGING_DIR}/proposed.md" ]; then
-        log "ERROR: Agent exited 0 but proposed.md was not written (cost: \$${COST})"
+        log "ERROR: Agent exited 0 but proposed.md was not written"
         "$NOTIFY" "Copilot Digest FAILED" "Dry run finished without writing proposed.md. See $AGENT_LOG." high x
         exit 1
     fi
-    log "Dry-run complete. Proposal written to ${STAGING_DIR}/proposed.md (cost: \$${COST})"
-    "$NOTIFY" "Copilot Digest (dry run)" "Proposal ready in staging/proposed.md. Cost: \$${COST}" default
+    log "Dry-run complete. Proposal written to ${STAGING_DIR}/proposed.md"
+    "$NOTIFY" "Copilot Digest (dry run)" "Proposal ready in staging/proposed.md." default
 else
     ARCHIVE_DIR="${VAULT_DIR}/Raw Digests"
     mkdir -p "$ARCHIVE_DIR"
     cp "${STAGING_DIR}/digest.md" "${ARCHIVE_DIR}/Copilot Digest - ${TODAY}.md"
     log "Archived raw digest to Raw Digests/Copilot Digest - ${TODAY}.md"
 
-    log "Filing complete (cost: \$${COST})"
-    "$NOTIFY" "Copilot Digest filed" "Tonight's digest was filed into the vault. Cost: \$${COST}" default white_check_mark
+    log "Filing complete"
+    "$NOTIFY" "Copilot Digest filed" "Tonight's digest was filed into the vault." default white_check_mark
 fi
 
 # --- Maintenance: Prune old logs & archives ---
