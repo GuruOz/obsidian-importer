@@ -146,6 +146,11 @@ cost of a larger prompt (and more token usage) on that one run.
 
 ## Operational notes
 
+- **Updating:** run `./update.sh`. It pulls the latest code (fast-forward only — refuses
+  to run with local changes), reports exactly which commits came in, flags any drift
+  between `.env` and `.env.example` (missing new keys, stale dead ones), rebuilds and
+  restarts the `pipeline` container, then verifies the new image took and that
+  `VAULT_DIR` still resolves to a populated vault with `Filing_Rules.md` present.
 - **Windows hosts:** enable "Start Docker Desktop when you sign in" in Docker Desktop
   settings, so the always-on guarantee survives reboots.
 - **Re-authenticating Graph:** if `fetch_digest.py` exits with code 30 (and you get a
