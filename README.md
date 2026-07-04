@@ -144,6 +144,32 @@ Tuning flags: `--samples-per-folder` (default 3), `--max-samples` (default 60),
 `--max-chars-per-file` (default 800) — raise these for a more thorough profile at the
 cost of a larger prompt (and more token usage) on that one run.
 
+## Ask your vault
+
+Read-only Q&A over the vault, using the same agent loop and LLM endpoint but with
+write/edit tools removed entirely:
+
+```
+./ask.sh "what did I do on ticket CS0012345?"
+./ask.sh "summarize my Purview work this month"
+```
+
+The agent gets the full note index up front, reads the relevant notes, and answers
+with the source note paths listed. Nothing is ever written.
+
+## Weekly reviews
+
+Every Sunday at 20:00 (before the nightly digest run) the pipeline synthesizes the
+week's daily notes into a single "Weekly Review YYYY-Wnn" note: highlights, recurring
+themes, and open loops, all wikilinked back to the source notes. Placement follows
+`Filing_Rules.md` conventions (falling back to a `Weekly/` folder at the vault root).
+It is create-only — an existing review note for the week is never overwritten — and
+it skips entirely while `DRY_RUN=1`. Run one on demand with:
+
+```
+docker compose exec pipeline scripts/run-weekly.sh
+```
+
 ## Operational notes
 
 - **Updating:** run `./update.sh`. It pulls the latest code (fast-forward only — refuses
@@ -161,6 +187,10 @@ cost of a larger prompt (and more token usage) on that one run.
 - **Manual run:** `docker compose exec pipeline scripts/run-digest.sh` (or
   `docker compose run --rm pipeline scripts/run-digest.sh` if the pipeline container
   isn't already up).
+- **Audit trail:** every run that changes the vault appends a wikilinked line to
+  `Raw Digests/Filing Log.md` (status, work date, entry count, every note touched),
+  and the ntfy notification carries the same summary — so the phone alert tells you
+  *what* was filed, not just that something was.
 - **Idempotency:** two independent layers — the `internetMessageId` ledger
   (`data/processed_ids.txt`) prevents re-ingesting the same email, and the
   `<!-- copilot-digest:YYYY-MM-DD -->` marker in each daily note prevents the agent
