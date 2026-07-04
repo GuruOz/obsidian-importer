@@ -155,7 +155,26 @@ write/edit tools removed entirely:
 ```
 
 The agent gets the full note index up front, reads the relevant notes, and answers
-with the source note paths listed. Nothing is ever written.
+with the source note paths listed. Nothing is ever written. It also has a lightweight
+BM25 lexical-search tool (`search_relevant`) for thematic/paraphrased questions where
+`grep_search`'s exact matching won't surface the right notes.
+
+## Chat with your vault
+
+A persistent, NotebookLM-style chat UI over the same read-only Q&A agent — multi-turn
+conversation, live "searching for X..." progress while the agent works, and answers
+with clickable source citations (`obsidian://open?...` links — open directly in the
+Obsidian app on a phone or desktop with the URI scheme registered; inert text
+elsewhere). Runs as its own always-on service:
+
+```
+docker compose up -d vault-qa
+```
+
+Then open `http://<host>:8420/` in a browser. Like the Obsidian GUI at :3000, this is
+**LAN-only with no authentication** — anyone on your network can query the vault and
+spend LLM tokens doing it. Add a shared-secret check in `vault_web.py`'s
+`_check_auth()` hook if that's a concern on your network.
 
 ## Weekly reviews
 

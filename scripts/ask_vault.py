@@ -5,49 +5,17 @@ Usage (from the host):
     ./ask.sh "what did I do on ticket CS0012345?"
     docker compose exec pipeline python3 scripts/ask_vault.py "summarize my Purview work this month"
 
-Reuses the tool implementations from custom_agent_loop.py but exposes only the
-read-only ones (read_file, glob_search, grep_search) - this agent cannot write or
-edit anything, regardless of DRY_RUN.
+Thin CLI wrapper over vault_qa.py, which also backs the persistent web chat
+(vault_web.py) - the index/prompt/tool logic lives there so both stay in sync.
+Reuses only the read-only tool implementations from custom_agent_loop.py
+(read_file, glob_search, grep_search) plus a lexical (BM25) relevance search -
+this agent cannot write or edit anything, regardless of DRY_RUN.
 """
-import json
-import os
 import sys
 
 import custom_agent_loop as cal
-
-READONLY_TOOL_NAMES = {"read_file", "glob_search", "grep_search"}
-
-FINISH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "finish",
-        "description": "Call this when you have the answer, to end the session.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "answer": {"type": "string", "description": "The answer to the user's question, in markdown."},
-                "sources": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Vault-relative paths of the notes the answer was drawn from."
-                }
-            },
-            "required": ["answer"]
-        }
-    }
-}
-
-
-def build_vault_index():
-    """Vault-relative paths of every note, same exclusions as the nightly index."""
-    paths = []
-    for root, dirs, files in os.walk(cal.VAULT_DIR):
-        dirs[:] = sorted(d for d in dirs
-                         if not d.startswith(".") and d not in ("Attachments", "smart-chats"))
-        for f in sorted(files):
-            if f.endswith(".md"):
-                paths.append(os.path.relpath(os.path.join(root, f), cal.VAULT_DIR))
-    return paths
+import lexical_index
+import vault_qa
 
 
 def main():
@@ -56,34 +24,30 @@ def main():
         sys.exit(2)
     question = " ".join(sys.argv[1:]).strip()
 
-    client, model = cal.make_client()
+    try:
+        client, model = cal.make_client()
+    except cal.ConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    index = build_vault_index()
-    system_content = (
-        "You are a read-only research assistant for a personal Obsidian vault. "
-        "Answer the user's question from the vault's actual contents: shortlist candidate "
-        "notes from the index below by title and folder, Read the promising ones, and use "
-        "grep_search for identifiers (ticket numbers, names) that titles won't surface. "
-        "Quote specifics (dates, ticket numbers, decisions) rather than generalities, and "
-        "say plainly when the vault doesn't contain an answer. When done, call finish with "
-        "the answer and the source note paths.\n\n"
-        f"Vault index ({len(index)} notes):\n" + "\n".join(index)
-    )
+    index = vault_qa.build_vault_index()
+    lex = lexical_index.build_index(cal.VAULT_DIR)
+    system_content = vault_qa.build_system_prompt(index, lexical_index=lex)
 
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": question},
     ]
 
-    tools = [t for t in cal.TOOLS if t["function"]["name"] in READONLY_TOOL_NAMES] + [FINISH_TOOL]
-    handlers = {
-        "read_file": lambda a: cal.read_file(a.get("path", "")),
-        "glob_search": lambda a: cal.glob_search(a.get("pattern", "")),
-        "grep_search": lambda a: cal.grep_search(a.get("query", "")),
-    }
+    tools = vault_qa.build_tools(lexical_index=lex)
+    handlers = vault_qa.build_handlers(lexical_index=lex)
 
     print(f"Searching vault ({len(index)} notes) with {model}...", file=sys.stderr)
-    finish_args = cal.run_loop(client, model, messages, tools, handlers, max_loops=40)
+    try:
+        finish_args = cal.run_loop(client, model, messages, tools, handlers, max_loops=40)
+    except cal.AgentAPIError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
     if finish_args is None:
         print("ERROR: agent did not produce an answer within the loop limit.", file=sys.stderr)

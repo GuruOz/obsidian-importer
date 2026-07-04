@@ -16,7 +16,10 @@ The system runs completely unattended inside a Docker container (`obsidian-impor
     *   Invokes the LLM Agent (`custom_agent_loop.py`) to process the digest.
     *   On successful production runs (`DRY_RUN=0`), archives `digest.md` into `/vault/Raw Digests/Copilot Digest - <DATE>.md`.
 *   **`scripts/custom_agent_loop.py`**: A custom, standalone Python tool-calling harness. It interfaces with any OpenAI-compatible API (e.g., DeepSeek, OpenRouter) via the `openai` SDK, exposing file-system tools so the LLM can explore the vault and write files. Its `run_loop()` is reused by the other agents below.
-*   **`scripts/ask_vault.py`** (+ `./ask.sh` host wrapper): Read-only Q&A agent over the vault — same loop and endpoint, but only read/glob/grep tools are exposed, so it can never modify anything.
+*   **`scripts/vault_qa.py`**: Shared read-only Q&A logic (vault index, system prompt, tool/handler filtering) used by both `ask_vault.py` and `vault_web.py` — never exposes write/edit tools.
+*   **`scripts/ask_vault.py`** (+ `./ask.sh` host wrapper): One-shot CLI Q&A over the vault, built on `vault_qa.py`.
+*   **`scripts/lexical_index.py`**: In-memory BM25 lexical search over chunked vault text (`rank_bm25`), exposed to the Q&A agents as a `search_relevant` tool for thematic/paraphrased questions where `grep_search`'s exact matching falls short. Rebuilt per chat session — no persisted index to go stale.
+*   **`scripts/vault_web.py`** (+ `scripts/web/index.html`): Persistent NotebookLM-style chat web UI over `vault_qa.py`, served via Flask/waitress. Multi-turn per-session history, Server-Sent-Events progress streaming, `obsidian://` source citation links. Runs as its own `vault-qa` Compose service on port 8420.
 *   **`scripts/run-weekly.sh`** + **`prompt_weekly_rollup.txt`**: Sunday-evening cron job that synthesizes the week's daily notes into a create-only "Weekly Review YYYY-Wnn" note. Skips when `DRY_RUN=1`.
 *   **`scripts/filing_report.py`**: Parses an agent run log's final `finish` JSON into a one-line summary for ntfy and appends a wikilinked audit line to `Raw Digests/Filing Log.md` in the vault.
 *   **`prompt_template.txt` & `prompt_dry_run.txt`**: The system instructions fed to the LLM agent. These contain strict behavioral rules for how data should be interpreted and filed.

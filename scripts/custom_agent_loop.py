@@ -14,6 +14,14 @@ VAULT_DIR = os.path.normpath(os.environ.get("VAULT_DIR", "/vault"))
 STAGING_DIR = os.path.normpath(os.environ.get("STAGING_DIR", "/work/staging"))
 DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
 
+
+class ConfigError(RuntimeError):
+    """Raised by make_client() when LLM_* env vars are missing/invalid."""
+
+
+class AgentAPIError(RuntimeError):
+    """Raised by run_loop() when the LLM endpoint call fails."""
+
 def safe_path(p: str) -> str:
     """Ensure path is within the allowed directories (VAULT_DIR or STAGING_DIR)."""
     if not os.path.isabs(p):
@@ -196,21 +204,22 @@ TOOLS = [
 ]
 
 def make_client():
-    """Build the OpenAI-compatible client from LLM_* env vars, or exit loudly."""
+    """Build the OpenAI-compatible client from LLM_* env vars, or raise ConfigError."""
     api_key = os.environ.get("LLM_API_KEY")
     base_url = os.environ.get("LLM_BASE_URL")
     model = os.environ.get("LLM_MODEL")
     if not all([api_key, base_url, model]):
-        print("ERROR: LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL must be set for custom agent.", file=sys.stderr)
-        sys.exit(1)
+        raise ConfigError("LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL must be set for custom agent.")
     return OpenAI(api_key=api_key, base_url=base_url), model
 
 
-def run_loop(client, model, messages, tools, handlers, max_loops=30):
+def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb=None):
     """Drive the tool-calling loop until the model calls `finish`.
 
     `handlers` maps tool name -> callable(args_dict) -> str. Returns the finish
-    call's arguments dict, or None if max_loops was exhausted.
+    call's arguments dict, or None if max_loops was exhausted. Raises AgentAPIError
+    on an LLM endpoint failure. `progress_cb(tool_name, args_dict)`, if given, is
+    called right before each tool is dispatched (never allowed to break the loop).
     """
     for _ in range(max_loops):
         try:
@@ -221,8 +230,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30):
                 tool_choice="auto"
             )
         except Exception as e:
-            print(f"API Error: {e}", file=sys.stderr)
-            sys.exit(1)
+            raise AgentAPIError(f"API Error: {e}") from e
 
         msg = response.choices[0].message
         messages.append(msg)
@@ -243,6 +251,11 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30):
                 continue
 
             print(f">> Tool Call: {func_name}", file=sys.stderr)
+            if progress_cb is not None:
+                try:
+                    progress_cb(func_name, args)
+                except Exception:
+                    pass  # progress reporting must never break the agent loop
 
             if func_name == "finish":
                 return args
@@ -267,7 +280,11 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30):
 
 
 def main():
-    client, model = make_client()
+    try:
+        client, model = make_client()
+    except ConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
     prompt_file = sys.argv[1]
 
     with open(prompt_file, "r", encoding="utf-8") as f:
@@ -296,7 +313,11 @@ def main():
         "edit_file": lambda a: edit_file(a.get("path", ""), a.get("old_string", ""), a.get("new_string", "")),
     }
 
-    finish_args = run_loop(client, model, messages, TOOLS, handlers)
+    try:
+        finish_args = run_loop(client, model, messages, TOOLS, handlers)
+    except AgentAPIError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
     if finish_args is None:
         print(json.dumps({"error": "Exceeded maximum tool call loops"}))
         sys.exit(1)
