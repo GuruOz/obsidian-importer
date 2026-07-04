@@ -258,6 +258,14 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                     pass  # progress reporting must never break the agent loop
 
             if func_name == "finish":
+                # Answer this call (and any remaining parallel calls in the same
+                # assistant message) before returning, so the transcript stays
+                # valid if the caller reuses `messages` for a follow-up turn -
+                # OpenAI-compatible APIs reject histories with unanswered tool calls.
+                idx = msg.tool_calls.index(tool_call)
+                for tc in msg.tool_calls[idx:]:
+                    messages.append({"role": "tool", "tool_call_id": tc.id,
+                                     "name": tc.function.name, "content": "Finished."})
                 return args
 
             handler = handlers.get(func_name)

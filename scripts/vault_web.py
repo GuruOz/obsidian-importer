@@ -64,9 +64,15 @@ def get_or_create_session(session_id):
         return new_id, SESSIONS[new_id]
 
 
+def _role(m):
+    """Message role, whether m is a plain dict or an OpenAI SDK message object
+    (run_loop appends the SDK's assistant-message objects to the history)."""
+    return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+
+
 def _cap_history(messages, max_turns):
     """Keep messages[0] (system) plus at most the last max_turns user turns."""
-    user_idxs = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    user_idxs = [i for i, m in enumerate(messages) if _role(m) == "user"]
     if len(user_idxs) <= max_turns:
         return
     cutoff = user_idxs[-max_turns]
@@ -94,12 +100,11 @@ def chat():
     if not session["lock"].acquire(blocking=False):
         return jsonify({"error": "a request is already in flight for this session"}), 409
 
-    session["messages"].append({"role": "user", "content": user_message})
-    _cap_history(session["messages"], MAX_TURNS)
-
     q = queue.Queue()
 
     def progress_cb(tool_name, args):
+        if tool_name == "finish":
+            return  # the answer event follows immediately; don't flash it as progress
         q.put(("progress", {"tool": tool_name, "args": args}))
 
     def worker():
@@ -121,7 +126,15 @@ def chat():
             session["lock"].release()
             q.put(("__done__", {}))
 
-    threading.Thread(target=worker, daemon=True).start()
+    # Anything that fails between acquiring the lock and the worker taking
+    # ownership of it must release it, or the session is bricked with 409s.
+    try:
+        session["messages"].append({"role": "user", "content": user_message})
+        _cap_history(session["messages"], MAX_TURNS)
+        threading.Thread(target=worker, daemon=True).start()
+    except Exception:
+        session["lock"].release()
+        raise
 
     def stream():
         yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
