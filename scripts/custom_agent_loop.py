@@ -10,17 +10,18 @@ from datetime import datetime
 from openai import OpenAI
 
 # Environment setup
-VAULT_DIR = os.environ.get("VAULT_DIR", "/vault")
-STAGING_DIR = os.environ.get("STAGING_DIR", "/work/staging")
+VAULT_DIR = os.path.normpath(os.environ.get("VAULT_DIR", "/vault"))
+STAGING_DIR = os.path.normpath(os.environ.get("STAGING_DIR", "/work/staging"))
 DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
 
 def safe_path(p: str) -> str:
     """Ensure path is within the allowed directories (VAULT_DIR or STAGING_DIR)."""
-    p = os.path.normpath(p)
     if not os.path.isabs(p):
         p = os.path.join(VAULT_DIR, p)
     p = os.path.normpath(p)
-    if not (p.startswith(VAULT_DIR) or p.startswith(STAGING_DIR)):
+    # Bare startswith would also match sibling dirs (e.g. "/vault2" vs "/vault"),
+    # so require an exact root match or a path-separator boundary.
+    if not any(p == root or p.startswith(root + os.sep) for root in (VAULT_DIR, STAGING_DIR)):
         raise ValueError(f"Access denied: {p}")
     return p
 

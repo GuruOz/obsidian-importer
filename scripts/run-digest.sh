@@ -10,6 +10,7 @@ VAULT_DIR="${VAULT_DIR:-/vault}"
 WORKDIR="${WORKDIR:-/work}"
 LOG_DIR="${LOG_DIR:-/work/logs}"
 STAGING_DIR="${STAGING_DIR:-/work/staging}"
+LEDGER_FILE="${LEDGER_FILE:-/work/processed_ids.txt}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 DRY_RUN="${DRY_RUN:-1}"
 
@@ -126,6 +127,14 @@ else
 
     log "Filing complete"
     "$NOTIFY" "Copilot Digest filed" "Tonight's digest was filed into the vault." default white_check_mark
+fi
+
+# --- Commit the ledger only now that the run demonstrably succeeded. If anything
+# above failed, the staged emails stay un-ledgered and tomorrow's fetch retries them. ---
+if [ -s "${STAGING_DIR}/pending_ids.txt" ]; then
+    cat "${STAGING_DIR}/pending_ids.txt" >> "$LEDGER_FILE"
+    rm -f "${STAGING_DIR}/pending_ids.txt"
+    log "Ledger updated."
 fi
 
 # --- Maintenance: Prune old logs & archives ---

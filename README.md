@@ -164,7 +164,9 @@ cost of a larger prompt (and more token usage) on that one run.
 - **Idempotency:** two independent layers — the `internetMessageId` ledger
   (`data/processed_ids.txt`) prevents re-ingesting the same email, and the
   `<!-- copilot-digest:YYYY-MM-DD -->` marker in each daily note prevents the agent
-  from re-filing the same day twice, even on a manual re-run.
+  from re-filing the same day twice, even on a manual re-run. The ledger is committed
+  only after the agent step succeeds, so a night that fails mid-run (API outage, bad
+  key) is retried automatically the next night instead of being lost.
 - **Mailbox is never modified:** the Graph app has `Mail.Read` only. Inbox tidiness
   comes from your Outlook.com rule moving digests into the `DIGEST_FOLDER`.
 - **Cost controls:** the nightly run's cost scales with the digest's entry count.

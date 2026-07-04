@@ -18,5 +18,5 @@ curl -fsS \
     -H "Title: ${TITLE}" \
     -H "Priority: ${PRIORITY}" \
     ${TAGS:+-H "Tags: ${TAGS}"} \
-    -d "${MESSAGE}" \
+    --data-raw "${MESSAGE}" \
     "${NTFY_TOPIC}" >/dev/null || echo "notify.sh: failed to POST to NTFY_TOPIC" >&2
