@@ -1,0 +1,29 @@
+You are documenting the structural and formatting conventions of this Obsidian vault,
+based on a sampled profile of its actual contents.
+
+1. Read the profile at /work/staging/vault_profile.md. It contains the vault's folder
+   tree (with file counts) and the full text of a random sample of markdown files
+   drawn from across that tree.
+2. This vault's CLAUDE.md is already loaded and may still contain TODO placeholders -
+   ignore the placeholders, but keep its "Append-only discipline" and "Idempotency
+   marker" sections in mind; do not duplicate or contradict them.
+3. From the sampled files and folder tree, infer:
+   - Folder taxonomy: what each top-level folder is for, based on its name and the
+     files inside it.
+   - Daily note conventions: file location and filename pattern (look for
+     YYYY-MM-DD-style filenames), and the heading structure used inside them.
+   - The rule for what belongs in a daily note versus a topic/project note.
+   - Heading naming conventions used across notes.
+   - Tag vocabulary: tags actually observed (frontmatter arrays or #hashtags) and,
+     where inferable, what each is used for.
+   - Linking style: how notes reference each other (e.g. [[Wikilinks]]) and how
+     topic/project notes are backlinked from daily notes or each other.
+   - A "create vs. update" heuristic: how to tell whether a topic/project note already
+     exists for something before creating a new one (e.g. exact title match under a
+     specific folder).
+4. Write your findings to /vault/Filing_Rules.md using Write, with one heading per item
+   above. If the sample doesn't give enough signal for a section, say so explicitly in
+   that section rather than guessing - a future run with more samples can fill it in.
+5. Do not modify CLAUDE.md or any other file in the vault. Write only Filing_Rules.md.
+6. You have access only to Read, Glob, Grep, and Write. Do not attempt any other tool.
+7. When finished, if a `finish` tool is available, use it. If not, output ONLY a short JSON object to the console: {"status": "written", "sections": N}

@@ -1,0 +1,36 @@
+services:
+  # Primary Obsidian instance. The pipeline interacts directly with the vault managed
+  # by this container to ensure it remains isolated from the host filesystem.
+  # Access the Obsidian GUI via a web browser at http://localhost:3000 to configure Sync.
+  obsidian:
+    image: lscr.io/linuxserver/obsidian:latest
+    container_name: copilot-digest-obsidian
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Singapore
+    volumes:
+      - obsidian_config:/config
+      - obsidian_only_vault:/vaults
+    ports:
+      - "3000:3000"   # KasmVNC web GUI - http://localhost:3000
+      - "3001:3001"   # KasmVNC web GUI - https
+    restart: unless-stopped
+    shm_size: "1gb"
+
+  pipeline:
+    build: .
+    container_name: copilot-digest-pipeline
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Singapore
+    volumes:
+      # Isolated vault, managed by the standalone obsidian container above.
+      - obsidian_only_vault:/vault
+      - ./data:/work
+    restart: unless-stopped
+
+volumes:
+  obsidian_only_vault:
+  obsidian_config:
