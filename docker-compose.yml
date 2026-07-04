@@ -20,6 +20,7 @@ services:
 
   pipeline:
     build: .
+    image: copilot-digest-pipeline:latest
     container_name: copilot-digest-pipeline
     env_file:
       - .env
@@ -29,6 +30,24 @@ services:
       # Isolated vault, managed by the standalone obsidian container above.
       - obsidian_only_vault:/vault
       - ./data:/work
+    restart: unless-stopped
+
+  # NotebookLM-style chat over the vault (read-only). Reuses the pipeline image -
+  # no build: block of its own - just a different command.
+  vault-qa:
+    image: copilot-digest-pipeline:latest
+    container_name: copilot-digest-vault-qa
+    depends_on:
+      - pipeline
+    command: ["python3", "scripts/vault_web.py"]
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Singapore
+    volumes:
+      - obsidian_only_vault:/vault:ro
+    ports:
+      - "8420:8420"
     restart: unless-stopped
 
 volumes:
