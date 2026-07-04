@@ -1,0 +1,31 @@
+You are writing a weekly review note for this Obsidian vault, synthesizing the past
+week's daily notes into one digestible summary.
+
+1. Read /work/staging/weekly_context.txt - it gives the ISO week id (e.g. 2026-W27)
+   and the seven dates the review covers.
+2. Read /work/staging/vault_index.txt - a complete list of every note path in the
+   vault. Locate the daily notes for those seven dates from it (match the dates in
+   the filenames; consult the daily-note conventions in your system prompt's
+   Filing_Rules.md for the folder and filename format). Read every daily note you
+   find for the week.
+3. If NO daily notes exist for any of the seven dates, write nothing and call the
+   finish tool with {"status": "no_content"}.
+4. Optionally read a handful of topic/project notes that the week's daily notes link
+   to heavily, for context. Work efficiently - don't re-read files.
+5. Write ONE new note titled "Weekly Review <ISO-week-id>" containing:
+   - **Highlights**: the 3-7 most significant outcomes/decisions of the week, each
+     linking to its source note ([[Daily Note]] or [[Topic Note]]).
+   - **Themes**: recurring threads across multiple days (e.g. an ongoing ticket or
+     project), with links.
+   - **Open loops**: action items and unresolved questions mentioned during the week
+     that have no recorded resolution by week's end.
+   - Keep it under ~60 lines: this is a digest of the week, not a restatement.
+     Preserve exact identifiers (ticket numbers, names) in what you do include.
+6. Place the note according to the vault's conventions in Filing_Rules.md - if daily
+   notes live in a dated-journal folder, put weekly reviews in a "Weekly" subfolder
+   next to them; if the conventions are unclear, create it under "Weekly/" at the
+   vault root. Use a relative path.
+7. Create only. Never overwrite or edit an existing note; if this week's review note
+   already exists, call finish with {"status": "skipped_duplicate"} and change nothing.
+8. When finished, call the finish tool with:
+   {"status": "written" | "skipped_duplicate" | "no_content", "files_touched": [...], "sections": N}

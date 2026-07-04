@@ -117,16 +117,21 @@ if [ "$DRY_RUN" = "1" ]; then
         "$NOTIFY" "Copilot Digest FAILED" "Dry run finished without writing proposed.md. See $AGENT_LOG." high x
         exit 1
     fi
-    log "Dry-run complete. Proposal written to ${STAGING_DIR}/proposed.md"
-    "$NOTIFY" "Copilot Digest (dry run)" "Proposal ready in staging/proposed.md." default
+    REPORT="$(python3 "${SCRIPT_DIR}/filing_report.py" "$AGENT_LOG" || true)"
+    log "Dry-run complete. Proposal written to ${STAGING_DIR}/proposed.md (${REPORT:-no summary})"
+    "$NOTIFY" "Copilot Digest (dry run)" "Proposal ready in staging/proposed.md. ${REPORT}" default
 else
     ARCHIVE_DIR="${VAULT_DIR}/Raw Digests"
     mkdir -p "$ARCHIVE_DIR"
     cp "${STAGING_DIR}/digest.md" "${ARCHIVE_DIR}/Copilot Digest - ${TODAY}.md"
     log "Archived raw digest to Raw Digests/Copilot Digest - ${TODAY}.md"
 
-    log "Filing complete"
-    "$NOTIFY" "Copilot Digest filed" "Tonight's digest was filed into the vault." default white_check_mark
+    # Audit trail: summarize what the agent touched, both to ntfy and to a
+    # wikilinked "Filing Log" note inside the vault (visible on every synced device).
+    REPORT="$(python3 "${SCRIPT_DIR}/filing_report.py" "$AGENT_LOG" \
+        --vault-log "${VAULT_DIR}/Raw Digests/Filing Log.md" || true)"
+    log "Filing complete (${REPORT:-no summary})"
+    "$NOTIFY" "Copilot Digest filed" "${REPORT:-Digest was filed into the vault.}" default white_check_mark
 fi
 
 # --- Commit the ledger only now that the run demonstrably succeeded. If anything

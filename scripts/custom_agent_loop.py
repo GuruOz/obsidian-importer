@@ -195,17 +195,80 @@ TOOLS = [
     }
 ]
 
-def main():
+def make_client():
+    """Build the OpenAI-compatible client from LLM_* env vars, or exit loudly."""
     api_key = os.environ.get("LLM_API_KEY")
     base_url = os.environ.get("LLM_BASE_URL")
     model = os.environ.get("LLM_MODEL")
-    prompt_file = sys.argv[1]
-
     if not all([api_key, base_url, model]):
         print("ERROR: LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL must be set for custom agent.", file=sys.stderr)
         sys.exit(1)
+    return OpenAI(api_key=api_key, base_url=base_url), model
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+
+def run_loop(client, model, messages, tools, handlers, max_loops=30):
+    """Drive the tool-calling loop until the model calls `finish`.
+
+    `handlers` maps tool name -> callable(args_dict) -> str. Returns the finish
+    call's arguments dict, or None if max_loops was exhausted.
+    """
+    for _ in range(max_loops):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto"
+            )
+        except Exception as e:
+            print(f"API Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+        msg = response.choices[0].message
+        messages.append(msg)
+
+        if not msg.tool_calls:
+            # Model responded with text instead of finishing. Just prompt it to finish.
+            messages.append({"role": "user", "content": "Please continue and use the finish tool when done."})
+            continue
+
+        for tool_call in msg.tool_calls:
+            func_name = tool_call.function.name
+
+            try:
+                args = json.loads(tool_call.function.arguments)
+            except Exception as e:
+                messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name,
+                                 "content": f"Error parsing JSON arguments: {e}"})
+                continue
+
+            print(f">> Tool Call: {func_name}", file=sys.stderr)
+
+            if func_name == "finish":
+                return args
+
+            handler = handlers.get(func_name)
+            if handler is None:
+                result = f"Unknown function {func_name}"
+            else:
+                try:
+                    result = handler(args)
+                except Exception as e:
+                    result = f"Error in {func_name}: {e}"
+
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": func_name,
+                "content": str(result)
+            })
+
+    return None
+
+
+def main():
+    client, model = make_client()
+    prompt_file = sys.argv[1]
 
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read()
@@ -225,69 +288,19 @@ def main():
 
     print(f"Starting custom agent loop with model {model} (DRY_RUN={DRY_RUN})...", file=sys.stderr)
 
-    loop_count = 0
-    max_loops = 30
-    
-    while loop_count < max_loops:
-        loop_count += 1
-        
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto"
-            )
-        except Exception as e:
-            print(f"API Error: {e}", file=sys.stderr)
-            sys.exit(1)
+    handlers = {
+        "read_file": lambda a: read_file(a.get("path", "")),
+        "glob_search": lambda a: glob_search(a.get("pattern", "")),
+        "grep_search": lambda a: grep_search(a.get("query", "")),
+        "write_file": lambda a: write_file(a.get("path", ""), a.get("content", "")),
+        "edit_file": lambda a: edit_file(a.get("path", ""), a.get("old_string", ""), a.get("new_string", "")),
+    }
 
-        msg = response.choices[0].message
-        messages.append(msg)
-
-        if not msg.tool_calls:
-            # Model responded with text instead of finishing. Just prompt it to finish.
-            messages.append({"role": "user", "content": "Please continue and use the finish tool when done."})
-            continue
-
-        for tool_call in msg.tool_calls:
-            func_name = tool_call.function.name
-            
-            try:
-                args = json.loads(tool_call.function.arguments)
-            except Exception as e:
-                result = f"Error parsing JSON arguments: {e}"
-                messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name, "content": result})
-                continue
-                
-            print(f">> Tool Call: {func_name}", file=sys.stderr)
-            
-            if func_name == "finish":
-                print(json.dumps(args))
-                return
-                
-            elif func_name == "read_file":
-                result = read_file(args.get("path", ""))
-            elif func_name == "glob_search":
-                result = glob_search(args.get("pattern", ""))
-            elif func_name == "grep_search":
-                result = grep_search(args.get("query", ""))
-            elif func_name == "write_file":
-                result = write_file(args.get("path", ""), args.get("content", ""))
-            elif func_name == "edit_file":
-                result = edit_file(args.get("path", ""), args.get("old_string", ""), args.get("new_string", ""))
-            else:
-                result = f"Unknown function {func_name}"
-                
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tool_call.id,
-                "name": func_name,
-                "content": str(result)
-            })
-
-    print(json.dumps({"error": "Exceeded maximum tool call loops"}))
-    sys.exit(1)
+    finish_args = run_loop(client, model, messages, TOOLS, handlers)
+    if finish_args is None:
+        print(json.dumps({"error": "Exceeded maximum tool call loops"}))
+        sys.exit(1)
+    print(json.dumps(finish_args))
 
 if __name__ == "__main__":
     main()
