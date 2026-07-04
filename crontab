@@ -1,0 +1,2 @@
+# supercronic crontab - times are in TZ set on the pipeline container (Asia/Singapore)
+30 21 * * * /app/scripts/run-digest.sh >> /work/logs/cron.log 2>&1
