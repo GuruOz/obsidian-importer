@@ -13,17 +13,17 @@ The system runs completely unattended inside a Docker container (`obsidian-impor
     *   Takes incremental `rsync` snapshots of the vault before any operations (for safety).
     *   Calls `fetch_digest.py` to retrieve the latest email and save it to `/work/staging/digest.md`.
     *   Generates a flat index of all existing markdown files in the vault and saves it to `/work/staging/vault_index.txt`.
-    *   Invokes the LLM Agent (either Claude CLI or Custom Python Agent) to process the digest.
+    *   Invokes the LLM Agent (`custom_agent_loop.py`) to process the digest.
     *   On successful production runs (`DRY_RUN=0`), archives `digest.md` into `/vault/Raw Digests/Copilot Digest - <DATE>.md`.
 *   **`scripts/custom_agent_loop.py`**: A custom, standalone Python tool-calling harness. It interfaces with any OpenAI-compatible API (e.g., DeepSeek, OpenRouter) via the `openai` SDK, exposing file-system tools so the LLM can explore the vault and write files.
 *   **`prompt_template.txt` & `prompt_dry_run.txt`**: The system instructions fed to the LLM agent. These contain strict behavioral rules for how data should be interpreted and filed.
 
 ## 3. Agent Tooling Capabilities
-When `AGENT_ENGINE=custom` is defined in `.env`, `custom_agent_loop.py` is invoked. It grants the LLM the following JSON-schema tools:
+`custom_agent_loop.py` is the sole agent harness. It grants the LLM the following JSON-schema tools:
 *   `read_file(path)`: Reads content of a specified file.
 *   `glob_search(pattern)`: Searches for files matching a path pattern (e.g., `*Purview*.md`).
 *   `grep_search(query)`: Performs regex searches inside the content of all markdown files.
-*   `write_file(path, content)`: Creates a new file or overwrites an existing one. (Restricted to `proposed.md` during Dry Runs).
+*   `write_file(path, content)`: Creates a new file or overwrites an existing one. (Restricted to `proposed.md` and `Filing_Rules.md` during Dry Runs).
 *   `edit_file(path, old_string, new_string)`: Performs precise string replacements on an existing file without having to rewrite the entire document.
 *   `finish(status, work_date, files_touched, entries_filed, sections)`: **REQUIRED.** The agent must call this tool to yield control back to the orchestrator script with a structured JSON payload indicating completion.
 

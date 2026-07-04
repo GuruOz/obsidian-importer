@@ -2,10 +2,9 @@ You are proposing how tonight's M365 Copilot work-summary digest should be filed
 this Obsidian vault. This is a DRY RUN: you must not modify any file under the vault.
 
 1. Read the staged digest at /work/staging/digest.md.
-2. Follow the conventions in this vault's CLAUDE.md (already loaded). If Filing_Rules.md
-   exists at the vault root, read it too - it documents the concrete folder taxonomy,
-   daily-note format, tag vocabulary, and linking style (CLAUDE.md only holds the
-   process rules).
+2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
+   the file exists - it documents the concrete folder taxonomy, daily-note format, tag
+   vocabulary, linking style, and create-vs-update rule.
 3. Read /work/staging/vault_index.txt - a complete, current list of every note path in
    the vault. Use it as your primary create-vs-update tool: shortlist existing
    candidate notes by title and folder from the index, then Read only those specific
@@ -33,6 +32,6 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
 9. Work efficiently: don't re-read files you've already read, and keep commentary
    between tool calls to a minimum.
 10. Use your available tools (read, glob, grep, write) to perform this task. Do not edit vault files.
-11. When finished, if a `finish` tool is available, use it. If not, output ONLY a short JSON object to the console (no prose summary):
+11. When finished, call the finish tool with:
     {"status": "proposed" | "skipped_duplicate" | "no_content", "work_date": "YYYY-MM-DD", "files_touched": ["/work/staging/proposed.md"], "entries_filed": N}
 

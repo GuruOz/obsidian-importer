@@ -2,9 +2,9 @@
 """Run-once vault profiler (milestone M2).
 
 Traverses the vault to map its folder structure, takes a stratified random sample of
-markdown files, stages that profile, and invokes headless Claude Code (billed to the
-subscription OAuth token, same as the nightly filing step - not a raw API call) to
-synthesize /vault/Filing_Rules.md: a generated manifest of the vault's folder taxonomy,
+markdown files, stages that profile, and invokes the agent loop (custom_agent_loop.py,
+same OpenAI-compatible endpoint as the nightly filing step) to synthesize
+/vault/Filing_Rules.md: a generated manifest of the vault's folder taxonomy,
 daily-note format, tag vocabulary, linking style, and create-vs-update rule.
 
 Usage (from the host):
@@ -24,7 +24,7 @@ import sys
 from datetime import datetime, timezone
 
 EXCLUDE_DIR_PREFIXES = (".",)  # .obsidian, .trash, .git, etc.
-EXCLUDE_FILENAMES = {"CLAUDE.md", "Filing_Rules.md"}
+EXCLUDE_FILENAMES = {"Filing_Rules.md"}
 DEFAULT_EXCLUDE_DIR_NAMES = {"attachments"}  # not useful for inferring filing conventions
 
 
@@ -74,7 +74,7 @@ def stratified_sample(candidates, per_folder, max_total, priority_names, priorit
         by_folder.setdefault(folder, []).append((rel_path, abs_path))
 
     # Guaranteed floor: one file per top-level area, so a small folder (e.g. Finance,
-    # Car) is never fully invisible to Claude even after the global cap below.
+    # Car) is never fully invisible to the agent even after the global cap below.
     by_top_level = {}
     for rel_path, abs_path in candidates:
         top_level = rel_path.split(os.sep, 1)[0]
@@ -140,29 +140,11 @@ def write_profile(staging_dir, tree_lines, sampled, total_candidates, max_chars)
 
 
 def run_agent(vault_dir, staging_dir, log_dir):
-    engine = env("AGENT_ENGINE", "claude").lower()
-    
-    if engine == "custom":
-        args = [
-            "python3", "/app/scripts/custom_agent_loop.py",
-            "/app/prompt_vault_profile.txt"
-        ]
-        log_path = os.path.join(log_dir, f"vault_profile_custom.{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
-    else:
-        prompt = open("/app/prompt_vault_profile.txt", "r", encoding="utf-8").read()
-        args = [
-            "claude", "-p", prompt,
-            "--allowedTools", "Read,Glob,Grep,Write",
-            "--add-dir", staging_dir,
-            "--max-budget-usd", env("CLAUDE_MAX_BUDGET_USD", "0.75"),
-            "--output-format", "json",
-        ]
-        if env("CLAUDE_MODEL"):
-            args += ["--model", env("CLAUDE_MODEL")]
-        if env("CLAUDE_FALLBACK_MODEL"):
-            args += ["--fallback-model", env("CLAUDE_FALLBACK_MODEL")]
-            
-        log_path = os.path.join(log_dir, f"vault_profile_claude.{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
+    args = [
+        "python3", "/app/scripts/custom_agent_loop.py",
+        "/app/prompt_vault_profile.txt"
+    ]
+    log_path = os.path.join(log_dir, f"vault_profile.{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
 
     os.makedirs(log_dir, exist_ok=True)
 
@@ -189,7 +171,7 @@ def main():
     parser.add_argument("--exclude-dirs", default=",".join(sorted(DEFAULT_EXCLUDE_DIR_NAMES)),
                          help="Comma-separated folder names to skip entirely (case-insensitive).")
     parser.add_argument("--profile-only", action="store_true",
-                         help="Only build the staged profile; skip the Claude synthesis step.")
+                         help="Only build the staged profile; skip the agent synthesis step.")
     parser.add_argument("--force", action="store_true",
                          help="Overwrite an existing Filing_Rules.md.")
     args = parser.parse_args()
@@ -222,20 +204,19 @@ def main():
     print(f"Staged profile written to {profile_path}")
 
     if args.profile_only:
-        print("--profile-only set: skipping Claude synthesis. Inspect the staged profile above.")
+        print("--profile-only set: skipping agent synthesis. Inspect the staged profile above.")
         return
 
-    engine = env("AGENT_ENGINE", "claude").lower()
-    print(f"Invoking {engine} agent to synthesize Filing_Rules.md...")
+    print("Invoking agent to synthesize Filing_Rules.md...")
     rc, log_path = run_agent(vault_dir, staging_dir, log_dir)
 
     if rc != 0:
-        sys.exit(f"claude -p failed (exit {rc}). See {log_path}")
+        sys.exit(f"Agent failed (exit {rc}). See {log_path}")
 
     if os.path.exists(filing_rules_path):
         print(f"Filing_Rules.md written to {filing_rules_path}")
     else:
-        print(f"WARNING: claude -p exited 0 but {filing_rules_path} was not created. See {log_path}")
+        print(f"WARNING: agent exited 0 but {filing_rules_path} was not created. See {log_path}")
 
     print(f"Full log: {log_path}")
 

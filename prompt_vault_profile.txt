@@ -4,9 +4,10 @@ based on a sampled profile of its actual contents.
 1. Read the profile at /work/staging/vault_profile.md. It contains the vault's folder
    tree (with file counts) and the full text of a random sample of markdown files
    drawn from across that tree.
-2. This vault's CLAUDE.md is already loaded and may still contain TODO placeholders -
-   ignore the placeholders, but keep its "Append-only discipline" and "Idempotency
-   marker" sections in mind; do not duplicate or contradict them.
+2. Two durable process rules live in the nightly filing prompts, not in Filing_Rules.md:
+   append-only discipline (existing note content is never rewritten, reordered, or
+   deleted) and the <!-- copilot-digest:YYYY-MM-DD --> idempotency marker. Do not
+   duplicate or contradict them in what you write.
 3. From the sampled files and folder tree, infer:
    - Folder taxonomy: what each top-level folder is for, based on its name and the
      files inside it.
@@ -24,6 +25,6 @@ based on a sampled profile of its actual contents.
 4. Write your findings to /vault/Filing_Rules.md using Write, with one heading per item
    above. If the sample doesn't give enough signal for a section, say so explicitly in
    that section rather than guessing - a future run with more samples can fill it in.
-5. Do not modify CLAUDE.md or any other file in the vault. Write only Filing_Rules.md.
-6. You have access only to Read, Glob, Grep, and Write. Do not attempt any other tool.
-7. When finished, if a `finish` tool is available, use it. If not, output ONLY a short JSON object to the console: {"status": "written", "sections": N}
+5. Do not modify any other file in the vault. Write only Filing_Rules.md.
+6. You have access only to read, glob, grep, and write tools. Do not attempt any other tool.
+7. When finished, call the finish tool with: {"status": "written", "sections": N}

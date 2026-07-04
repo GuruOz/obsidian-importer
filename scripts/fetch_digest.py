@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Pull the nightly M365 Copilot digest email via Microsoft Graph, convert it to
-markdown, and stage it for the Claude Code filing step.
+markdown, and stage it for the agent filing step.
 
 Exit codes (consumed by run-digest.sh):
     0   staged a digest successfully
     1   unexpected/unhandled error
-    20  no new matching email found - orchestrator should skip Claude and notify benignly
+    20  no new matching email found - orchestrator should skip the agent and notify benignly
     30  Graph auth failed (token cache missing/expired) - needs `graph_auth.py` re-run
 """
 import os
