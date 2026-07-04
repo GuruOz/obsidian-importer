@@ -40,6 +40,6 @@ To ensure the Obsidian vault remains useful and organized, the LLM agent is stri
 
 ## 5. Deployment Lifecycle
 Because the Dockerfile uses `COPY scripts/ ./scripts/`, any modifications made to the shell or python scripts on the host machine **will not take effect** in the running container until the image is rebuilt. 
-*   **To apply script changes:** Run `docker compose build pipeline` followed by `docker compose up -d pipeline`.
+*   **To apply script changes:** Run `./update.sh` — pulls, rebuilds, restarts, and verifies config/vault-path drift in one step.
 *   **Dry Run Mode (`DRY_RUN=1`):** The agent operates normally but its write permissions are restricted. It can only output its final proposed markdown structure to `data/staging/proposed.md`. The vault is untouched.
 *   **Production Mode (`DRY_RUN=0`):** The agent writes directly to the vault. The orchestrator handles backups and archives the raw digest.
