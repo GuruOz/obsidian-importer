@@ -22,7 +22,8 @@ based on a sampled profile of its actual contents.
    - A "create vs. update" heuristic: how to tell whether a topic/project note already
      exists for something before creating a new one (e.g. exact title match under a
      specific folder).
-4. Write your findings to /vault/Filing_Rules.md using Write, with one heading per item
+4. Write your findings to Filing_Rules.md - use exactly that relative path, which
+   resolves to the vault root - with one heading per item
    above. If the sample doesn't give enough signal for a section, say so explicitly in
    that section rather than guessing - a future run with more samples can fill it in.
 5. Do not modify any other file in the vault. Write only Filing_Rules.md.

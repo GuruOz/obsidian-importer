@@ -85,11 +85,6 @@ def load_ledger(ledger_file):
         return set(line.strip() for line in f if line.strip())
 
 
-def append_ledger(ledger_file, message_id):
-    with open(ledger_file, "a", encoding="utf-8") as f:
-        f.write(message_id + "\n")
-
-
 def html_to_markdown(html):
     soup = BeautifulSoup(html, "html.parser")
 
@@ -139,7 +134,9 @@ def resolve_folder_id(token, folder_path):
 
     for part in parts:
         list_path = f"/me/mailFolders/{parent_id}/childFolders" if parent_id else "/me/mailFolders"
-        found = graph_get(token, list_path, params={"$filter": f"displayName eq '{part}'"})
+        # OData string literals escape single quotes by doubling them.
+        escaped = part.replace("'", "''")
+        found = graph_get(token, list_path, params={"$filter": f"displayName eq '{escaped}'"})
         values = found.get("value", [])
         if not values:
             sys.exit(
@@ -214,8 +211,14 @@ def main():
     with open(archive_path, "w", encoding="utf-8") as f:
         f.write(combined)
 
-    for msg in matches:
-        append_ledger(ledger_file, msg["internetMessageId"])
+    # Ledger commitment is deferred: the IDs are staged here, and run-digest.sh appends
+    # them to the ledger only after the agent step succeeds. A failed filing run
+    # therefore leaves these emails un-ledgered, and the next night's fetch picks them
+    # up again automatically instead of losing that day's digest forever.
+    pending_path = os.path.join(staging_dir, "pending_ids.txt")
+    with open(pending_path, "w", encoding="utf-8") as f:
+        for msg in matches:
+            f.write(msg["internetMessageId"] + "\n")
 
     print(f"Staged {len(matches)} digest email(s) to {digest_path}")
 
