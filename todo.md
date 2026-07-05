@@ -64,19 +64,28 @@ HTML file, no CDN dependencies (LAN-only deployment), and the backend's answer
 arrives via a `finish` tool call (not assistant text), which matters for streaming.
 
 ### 1. Core Chat & Messaging UI
-- [ ] **Streaming responses** - token-by-token rendering of the final answer without
-      layout shift. *Backend note: today the answer is the `finish` tool call's
-      arguments, which cannot be streamed; needs a protocol change (final answer as
-      streamed assistant text after tool use) before the UI part is possible.*
+- [x] **Streaming responses** - no protocol change was needed after all: run_loop
+      (opt-in `stream_cb`/`cancel_event` kwargs - digest pipeline/CLI callers keep
+      the non-streaming path) now uses `stream=True` and incrementally extracts
+      the `"answer"` string from the finish call's streamed JSON arguments
+      (`_AnswerExtractor`, handles escapes split across chunks; best-effort - if
+      the model orders keys oddly, nothing streams and the parsed args still
+      arrive at the end). UI renders `delta` SSE events into a streaming bubble
+      (throttled markdown re-render, blinking caret); the final answer event
+      replaces it with the fully parsed payload. *(Batch 8)*
 - [x] **Dynamic input box** - elastic textarea, grows to a max height; Enter submits,
       Shift+Enter inserts a newline. *(Batch 1)*
 - [x] **Message controls** - copy-whole-message button on each AI response;
       "Regenerate Response" on the last AI turn (server rewinds to the last user
       turn via a `regenerate` flag on /api/chat - no duplicate user message).
       *(Batch 2; per-code-block copy buttons landed in Batch 1.)*
-- [ ] **Inline stop control** - Send button morphs into Stop while streaming; abort
-      solidifies the partial response. *Backend note: needs a server-side cancel path
-      for the worker thread, not just closing the SSE stream.*
+- [x] **Inline stop control** - Send morphs into Stop (Esc works too); POST
+      /api/chat/stop sets a per-request threading.Event that run_loop checks
+      between stream chunks and tool dispatches, raising AgentCancelled with the
+      partial answer. The worker stores it as a normal answer with a `stopped`
+      flag (persists/hydrates; "⏹ stopped" in the meta row), and the message
+      history is repaired (partial tool calls answered/discarded) so follow-up
+      turns and Regenerate still work. *(Batch 8)*
 - [x] **Markdown & code rendering** - lists, bold/italic, tables, blockquotes,
       headings, links, inline code, fenced code blocks with lightweight syntax
       highlighting and per-block copy buttons. *(Batch 1. LaTeX deferred - requires
@@ -136,8 +145,9 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 
 ### 6. Quality of Life & Keyboard Ergonomics
 - [ ] **Keyboard shortcuts** - *partial:* Cmd/Ctrl+K (or O) starts a new chat, and
-      there's a header "New chat" button *(Batch 2)*. Still pending: Up-arrow edits
-      last message (needs message editing, §5) and Esc stop (needs stop control, §1).
+      there's a header "New chat" button *(Batch 2)*; Esc stops the in-flight
+      response *(Batch 8)*. Still pending: Up-arrow edits last message (needs
+      message editing, §5).
 - [x] **Chat export** - header "Export" menu downloads the stored transcript as
       Markdown (You/Assistant sections + sources) or JSON (full payloads incl.
       usage/elapsed/feedback). PDF stays browser print-to-PDF - no client-side

@@ -137,6 +137,10 @@
     background: #2b5797; color: white; font-size: 1rem; cursor: pointer;
   }
   button:disabled { opacity: 0.5; cursor: default; }
+  #send.stop { background: #8a3232; }
+  #send.stop:hover { background: #9c3a3a; }
+  .msg.streaming::after { content: "▍"; opacity: 0.7; animation: blink 1s step-start infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
 
   /* --- rendered markdown --- */
   .md p { margin: 0.4em 0; }
@@ -391,6 +395,8 @@ let sessionId = localStorage.getItem("vault_qa_session_id") || null;
 let vaultName = "vault";
 let metaNotes = null;
 let lastPayload = null;          // last /api/chat body, for Retry
+let busy = false;                // request in flight (Send is morphed into Stop)
+let stopping = false;            // stop already requested for the in-flight run
 const MSG_STORE = [];            // raw markdown per assistant message, for copy-all
 const CITE_STORE = [];           // citations array per assistant message, for the cite panel
 
@@ -461,7 +467,7 @@ function renderTranscript(entries) {
 }
 
 async function switchSession(id) {
-  if (sendBtn.disabled || id === sessionId) return;
+  if (busy || id === sessionId) return;
   saveView();
   sessionId = id;
   localStorage.setItem("vault_qa_session_id", sessionId);
@@ -676,7 +682,7 @@ if (localStorage.getItem("vault_qa_sidebar") === "0") sidebar.classList.add("col
 
 // --- new chat (button + Ctrl/Cmd+K) ---
 function newChat() {
-  if (sendBtn.disabled) return;
+  if (busy) return;
   if (sessionId) saveView();
   sessionId = null;
   localStorage.removeItem("vault_qa_session_id");
@@ -690,8 +696,9 @@ document.getElementById("new-chat").addEventListener("click", newChat);
 document.addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "o")) {
     e.preventDefault();
-    if (!sendBtn.disabled) newChat();
+    if (!busy) newChat();
   }
+  if (e.key === "Escape" && busy) stopCurrent();
 });
 
 function copyText(t) {
@@ -735,7 +742,7 @@ log.addEventListener("click", (e) => {
     return;
   }
   const fuChip = e.target.closest(".fu-chip");
-  if (fuChip && !sendBtn.disabled) {
+  if (fuChip && !busy) {
     const question = fuChip.textContent;
     fuChip.closest(".followups").remove();
     addMsg(question, "user");
@@ -743,13 +750,13 @@ log.addEventListener("click", (e) => {
     return;
   }
   const regenBtn = e.target.closest(".regen-btn");
-  if (regenBtn && !sendBtn.disabled) {
+  if (regenBtn && !busy) {
     regenBtn.closest(".msg.assistant").remove();
     ask({ regenerate: true });
     return;
   }
   const retryBtn = e.target.closest(".retry-btn");
-  if (retryBtn && !sendBtn.disabled && lastPayload) {
+  if (retryBtn && !busy && lastPayload) {
     retryBtn.closest(".msg.error").remove();
     ask(lastPayload);
     return;
@@ -842,7 +849,7 @@ input.addEventListener("input", autosize);
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    if (!sendBtn.disabled && input.value.trim()) form.requestSubmit();
+    if (!busy && input.value.trim()) form.requestSubmit();
   }
 });
 
@@ -953,7 +960,8 @@ function addAnswer(payload) {
 
   const div = document.createElement("div");
   div.className = "msg assistant md";
-  div.innerHTML = renderMarkdown(payload.answer || "");
+  div.innerHTML = renderMarkdown(payload.answer ||
+    (payload.stopped ? "*Stopped before an answer was produced.*" : ""));
 
   const citations = payload.citations || [];
   if (citations.length) {
@@ -992,6 +1000,7 @@ function addAnswer(payload) {
     metaBits.push(`↑${payload.usage.input_tokens || 0} ↓${payload.usage.output_tokens || 0} tokens`);
   }
   if (payload.elapsed != null) metaBits.push(`${payload.elapsed}s`);
+  if (payload.stopped) metaBits.push("⏹ stopped");
   if (metaBits.length) {
     const meta = document.createElement("div");
     meta.className = "msg-meta";
@@ -1039,11 +1048,41 @@ function addAnswer(payload) {
   maybeScroll();
 }
 
+function stopCurrent() {
+  if (!busy || stopping || !sessionId) return;
+  stopping = true;
+  sendBtn.textContent = "Stopping…";
+  fetch("/api/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  }).catch(() => { stopping = false; sendBtn.textContent = "Stop"; });
+}
+
 async function ask(payload) {
   lastPayload = payload;
-  sendBtn.disabled = true;
+  busy = true;
+  stopping = false;
+  sendBtn.textContent = "Stop";
+  sendBtn.classList.add("stop");
   input.disabled = true;
-  const progressEl = addProgress(payload.regenerate ? "regenerating..." : "thinking...");
+  let progressEl = addProgress(payload.regenerate ? "regenerating..." : "thinking...");
+
+  // Streaming answer bubble: deltas accumulate in streamBuf and re-render
+  // (throttled) until the final answer event replaces the whole thing.
+  let streamDiv = null, streamBuf = "", streamTimer = null;
+  function renderStream() {
+    streamTimer = null;
+    if (streamDiv) {
+      streamDiv.innerHTML = renderMarkdown(streamBuf);
+      maybeScroll();
+    }
+  }
+  function clearStream() {
+    if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
+    if (streamDiv) { streamDiv.remove(); streamDiv = null; }
+    if (progressEl) { progressEl.remove(); progressEl = null; }
+  }
 
   try {
     const resp = await fetch("/api/chat", {
@@ -1055,7 +1094,7 @@ async function ask(payload) {
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
-      progressEl.remove();
+      clearStream();
       addError(body.error || `Request failed (${resp.status})`);
       return;
     }
@@ -1063,7 +1102,6 @@ async function ask(payload) {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let lastProgress = progressEl;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -1089,24 +1127,37 @@ async function ask(payload) {
           localStorage.setItem("vault_qa_session_id", sessionId);
           if (typeof evt.notes === "number") updateBadge(evt.notes, evt.chunks);
         } else if (eventType === "progress") {
-          lastProgress.remove();
+          if (progressEl) progressEl.remove();
           const argStr = Object.values(evt.args || {}).join(" ");
-          lastProgress = addProgress(`${evt.tool}: ${argStr}`.trim());
+          progressEl = addProgress(`${evt.tool}: ${argStr}`.trim());
+        } else if (eventType === "delta") {
+          if (!streamDiv) {
+            if (progressEl) { progressEl.remove(); progressEl = null; }
+            streamDiv = document.createElement("div");
+            streamDiv.className = "msg assistant md streaming";
+            log.appendChild(streamDiv);
+            maybeScroll();
+          }
+          streamBuf += evt.text || "";
+          if (!streamTimer) streamTimer = setTimeout(renderStream, 120);
         } else if (eventType === "answer") {
-          lastProgress.remove();
+          clearStream();
           addAnswer(evt);
-          lastPayload = null;   // completed successfully; nothing to retry
+          lastPayload = null;   // completed (or stopped); nothing to retry
         } else if (eventType === "error") {
-          lastProgress.remove();
+          clearStream();
           addError(evt.message || "Unknown error");
         }
       }
     }
   } catch (err) {
-    progressEl.remove();
+    clearStream();
     addError("Connection error: " + err.message);
   } finally {
-    sendBtn.disabled = false;
+    busy = false;
+    stopping = false;
+    sendBtn.textContent = "Send";
+    sendBtn.classList.remove("stop");
     input.disabled = false;
     input.focus();
     refreshSidebar();   // new session / fresh title / recency reorder
@@ -1115,6 +1166,7 @@ async function ask(payload) {
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (busy) { stopCurrent(); return; }   // Send is morphed into Stop while in flight
   const text = input.value.trim();
   if (!text) return;
   addMsg(text, "user");

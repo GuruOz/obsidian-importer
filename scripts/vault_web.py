@@ -248,31 +248,46 @@ def chat():
         return jsonify({"error": "a request is already in flight for this session"}), 409
 
     q = queue.Queue()
+    # Fresh per request, so a stale stop for a finished request can't cancel
+    # this one. /api/chat/stop sets it; run_loop checks it between stream
+    # chunks and tool dispatches.
+    cancel = threading.Event()
+    session["cancel"] = cancel
 
     def progress_cb(tool_name, args):
         if tool_name == "finish":
             return  # the answer event follows immediately; don't flash it as progress
         q.put(("progress", {"tool": tool_name, "args": args}))
 
+    def stream_cb(text):
+        q.put(("delta", {"text": text}))
+
     def worker():
         t0 = time.time()
         usage = {}
+
+        def emit_answer(payload):
+            payload["usage"] = usage
+            payload["elapsed"] = round(time.time() - t0, 1)
+            session["transcript"].append({"type": "answer", **payload})
+            session["last_used"] = time.time()
+            _persist(session_id, session)
+            q.put(("answer", payload))
+
         try:
             tools = vault_qa.build_tools(lexical_index=session["lexical_index"])
             handlers = vault_qa.build_handlers(lexical_index=session["lexical_index"])
             finish_args = cal.run_loop(CLIENT, MODEL, session["messages"], tools, handlers,
                                         max_loops=40, progress_cb=progress_cb,
-                                        usage_out=usage)
+                                        usage_out=usage, stream_cb=stream_cb,
+                                        cancel_event=cancel)
             if finish_args is None:
                 q.put(("error", {"message": "Exceeded maximum tool call loops"}))
             else:
-                payload = dict(finish_args)
-                payload["usage"] = usage
-                payload["elapsed"] = round(time.time() - t0, 1)
-                session["transcript"].append({"type": "answer", **payload})
-                session["last_used"] = time.time()
-                _persist(session_id, session)
-                q.put(("answer", payload))
+                emit_answer(dict(finish_args))
+        except cal.AgentCancelled as e:
+            # Solidify whatever streamed before the stop as a stored answer.
+            emit_answer({"answer": e.partial_answer or "", "stopped": True})
         except cal.AgentAPIError as e:
             q.put(("error", {"message": str(e)}))
         except Exception as e:
@@ -326,6 +341,24 @@ def chat():
             yield f"event: {event}\ndata: {json.dumps(payload)}\n\n"
 
     return Response(stream(), mimetype="text/event-stream")
+
+
+@app.route("/api/chat/stop", methods=["POST"])
+def chat_stop():
+    """Cancel the in-flight request for a session. The worker aborts at the
+    next stream-chunk/tool boundary and emits a stopped answer carrying the
+    partial text, so the client's normal answer path solidifies it."""
+    body = request.get_json(force=True, silent=True) or {}
+    sid = body.get("session_id")
+    with SESSIONS_LOCK:
+        session = SESSIONS.get(sid)
+    if session is None:
+        return jsonify({"error": "unknown session"}), 404
+    cancel = session.get("cancel")
+    if cancel is None or not session["lock"].locked():
+        return jsonify({"error": "no request in flight"}), 409
+    cancel.set()
+    return jsonify({"ok": True})
 
 
 def _init_client():
