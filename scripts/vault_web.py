@@ -47,6 +47,8 @@ def _new_session():
     return {
         "messages": [{"role": "system", "content": system_content}],
         "lexical_index": lex,
+        "note_count": len(index),
+        "chunk_count": len(lex.chunks),
         "lock": threading.Lock(),
         "last_used": time.time(),
     }
@@ -86,14 +88,18 @@ def index():
 
 @app.route("/api/meta")
 def meta():
-    return jsonify({"vault_name": os.path.basename(cal.VAULT_DIR)})
+    return jsonify({
+        "vault_name": os.path.basename(cal.VAULT_DIR),
+        "notes": len(vault_qa.build_vault_index()),
+    })
 
 
 @app.route("/api/chat", methods=["POST"])
 def chat():
     body = request.get_json(force=True, silent=True) or {}
     user_message = (body.get("message") or "").strip()
-    if not user_message:
+    regenerate = bool(body.get("regenerate"))
+    if not user_message and not regenerate:
         return jsonify({"error": "empty message"}), 400
 
     session_id, session = get_or_create_session(body.get("session_id"))
@@ -108,15 +114,21 @@ def chat():
         q.put(("progress", {"tool": tool_name, "args": args}))
 
     def worker():
+        t0 = time.time()
+        usage = {}
         try:
             tools = vault_qa.build_tools(lexical_index=session["lexical_index"])
             handlers = vault_qa.build_handlers(lexical_index=session["lexical_index"])
             finish_args = cal.run_loop(CLIENT, MODEL, session["messages"], tools, handlers,
-                                        max_loops=40, progress_cb=progress_cb)
+                                        max_loops=40, progress_cb=progress_cb,
+                                        usage_out=usage)
             if finish_args is None:
                 q.put(("error", {"message": "Exceeded maximum tool call loops"}))
             else:
-                q.put(("answer", finish_args))
+                payload = dict(finish_args)
+                payload["usage"] = usage
+                payload["elapsed"] = round(time.time() - t0, 1)
+                q.put(("answer", payload))
         except cal.AgentAPIError as e:
             q.put(("error", {"message": str(e)}))
         except Exception as e:
@@ -129,15 +141,26 @@ def chat():
     # Anything that fails between acquiring the lock and the worker taking
     # ownership of it must release it, or the session is bricked with 409s.
     try:
-        session["messages"].append({"role": "user", "content": user_message})
-        _cap_history(session["messages"], MAX_TURNS)
+        if regenerate:
+            # Rewind to just after the last user turn and re-run it, instead of
+            # appending a duplicate user message.
+            user_idxs = [i for i, m in enumerate(session["messages"]) if _role(m) == "user"]
+            if not user_idxs:
+                session["lock"].release()
+                return jsonify({"error": "nothing to regenerate in this session"}), 400
+            del session["messages"][user_idxs[-1] + 1:]
+        else:
+            session["messages"].append({"role": "user", "content": user_message})
+            _cap_history(session["messages"], MAX_TURNS)
         threading.Thread(target=worker, daemon=True).start()
     except Exception:
         session["lock"].release()
         raise
 
     def stream():
-        yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
+        session_evt = {"session_id": session_id,
+                       "notes": session["note_count"], "chunks": session["chunk_count"]}
+        yield f"event: session\ndata: {json.dumps(session_evt)}\n\n"
         while True:
             try:
                 event, payload = q.get(timeout=KEEPALIVE_SECONDS)

@@ -62,9 +62,10 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
       streamed assistant text after tool use) before the UI part is possible.*
 - [x] **Dynamic input box** - elastic textarea, grows to a max height; Enter submits,
       Shift+Enter inserts a newline. *(Batch 1)*
-- [ ] **Message controls** - copy-whole-message button on each AI response;
-      "Regenerate Response" on the last AI turn. *(Per-code-block copy buttons
-      already done in Batch 1 as part of code-block rendering.)*
+- [x] **Message controls** - copy-whole-message button on each AI response;
+      "Regenerate Response" on the last AI turn (server rewinds to the last user
+      turn via a `regenerate` flag on /api/chat - no duplicate user message).
+      *(Batch 2; per-code-block copy buttons landed in Batch 1.)*
 - [ ] **Inline stop control** - Send button morphs into Stop while streaming; abort
       solidifies the partial response. *Backend note: needs a server-side cancel path
       for the worker thread, not just closing the SSE stream.*
@@ -78,9 +79,9 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 - [ ] **Inline citations** - clickable [1]-style footnotes opening a panel with the
       source note title + snippet. *Needs the finish tool schema extended so the
       model returns snippet-level citations, not just note paths.*
-- [ ] **Active context indicator** - badge near the input showing how many vault
-      notes are indexed for the current session (backend already knows: index length
-      + chunk count at session build).
+- [x] **Active context indicator** - badge under the chat showing vault note count
+      (from /api/meta on load) and per-session note + chunk counts (from the
+      session SSE event). *(Batch 2)*
 - [ ] **Suggested prompts** - 2-3 follow-up question chips after each answer;
       clicking submits. *Needs the finish tool schema extended with a
       `followups: [str]` field.*
@@ -96,9 +97,9 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 ### 4. Performance & Token Telemetry
 - [ ] **Extended reasoning toggle** - render model reasoning in a collapsible
       `<details>` block above the answer, when the backend model exposes it.
-- [ ] **Token & performance counters** - per-response input/output tokens and wall
-      time. *Backend: run_loop must accumulate `usage` from each API response and
-      include it in the answer event.*
+- [x] **Token & performance counters** - per-response input/output tokens and wall
+      time rendered under each answer. run_loop accumulates `usage` across all API
+      calls via an optional `usage_out` dict (CLI callers unaffected). *(Batch 2)*
 
 ### 5. Conversation Forking & Branching
 - [ ] **Message editing** - edit icon on past user messages turning them into an
@@ -108,8 +109,9 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
       (message tree instead of flat list).*
 
 ### 6. Quality of Life & Keyboard Ergonomics
-- [ ] **Keyboard shortcuts** - Up-arrow edits last message when input empty;
-      Cmd/Ctrl+K new chat; Esc dismisses modals / stops streaming.
+- [ ] **Keyboard shortcuts** - *partial:* Cmd/Ctrl+K (or O) starts a new chat, and
+      there's a header "New chat" button *(Batch 2)*. Still pending: Up-arrow edits
+      last message (needs message editing, §5) and Esc stop (needs stop control, §1).
 - [ ] **Chat export** - download conversation as Markdown / JSON (PDF via the
       browser's print-to-PDF; no client-side PDF library, staying dependency-free).
 - [ ] **Feedback buttons** - thumbs up/down per response, logged server-side.
@@ -117,10 +119,13 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 ### 7. State, Errors, & Boundary Constraints
 - [ ] **Context window warning** - progress bar tracking conversation + vault-context
       token usage against the model's limit. *Depends on token telemetry (§4).*
-- [ ] **Network & rate-limit handling** - inline error alerts with a Retry button for
-      timeouts / 429s / offline (today errors render but there's no retry action).
-- [ ] **Scroll-to-bottom anchor** - floating arrow appears when scrolled up during an
-      active stream; click snaps to the newest content.
+- [x] **Network & rate-limit handling** - inline error bubbles now carry a Retry
+      button that re-sends the exact failed payload (message or regenerate);
+      connection failures, HTTP errors, and agent errors all route through it.
+      *(Batch 2)*
+- [x] **Scroll-to-bottom anchor** - floating ↓ button appears when scrolled up
+      (sticky-scroll disengages); click snaps back and re-engages following.
+      *(Batch 2)*
 
 ### 8. Artifacts & Isolated Workspace
 - [ ] **Split-screen canvas** - large code/documents open in a right-hand panel

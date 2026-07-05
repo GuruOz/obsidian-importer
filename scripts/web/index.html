@@ -12,7 +12,32 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #1e1e1e; color: #e8e8e8;
   }
-  header { padding: 0.75rem 1rem; border-bottom: 1px solid #333; font-weight: 600; }
+  header { padding: 0.6rem 1rem; border-bottom: 1px solid #333; font-weight: 600;
+           display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  #new-chat { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
+  #new-chat:hover { background: #454545; }
+  #statusbar { padding: 0.15rem 1rem 0.3rem; font-size: 0.75rem; color: #888; }
+  #scroll-down {
+    position: fixed; right: 1.5rem; bottom: 5.5rem; display: none;
+    width: 2.4rem; height: 2.4rem; padding: 0; border-radius: 999px;
+    background: #3a3a3a; border: 1px solid #555; font-size: 1.1rem; line-height: 1;
+  }
+  #scroll-down:hover { background: #454545; }
+  .msg.assistant { position: relative; }
+  .msg-copy {
+    position: absolute; top: 0.35rem; right: 0.35rem; font-size: 0.72rem;
+    padding: 0.12rem 0.45rem; border-radius: 6px; background: #3a3a3a; color: #bbb;
+    border: 1px solid #4a4a4a; opacity: 0; transition: opacity 0.15s;
+  }
+  .msg.assistant:hover .msg-copy { opacity: 0.85; }
+  .msg-meta { margin-top: 0.5rem; font-size: 0.72rem; color: #888; }
+  .regen-row { margin-top: 0.45rem; }
+  .regen-btn, .retry-btn {
+    font-size: 0.78rem; padding: 0.2rem 0.6rem; background: #3a3a3a; color: #ccc;
+    border: 1px solid #4a4a4a; border-radius: 6px;
+  }
+  .regen-btn:hover, .retry-btn:hover { background: #454545; }
+  .retry-btn { margin-top: 0.45rem; display: block; }
   #log { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.9rem; }
   .msg { max-width: 80%; padding: 0.6rem 0.9rem; border-radius: 10px; line-height: 1.45; }
   .msg.user { align-self: flex-end; background: #2b5797; white-space: pre-wrap; }
@@ -88,12 +113,22 @@
     .code-copy { background: #e0e0e0; color: #333; border-color: #ccc; }
     .tok-kw { color: #7c4dbd; } .tok-str { color: #2e7d32; }
     .tok-com { color: #999; } .tok-num { color: #b26a00; }
+    #new-chat { background: #e4e4e4; color: #1a1a1a; }
+    #new-chat:hover { background: #d8d8d8; }
+    #scroll-down { background: #e4e4e4; color: #1a1a1a; border-color: #ccc; }
+    .msg-copy, .regen-btn, .retry-btn { background: #e0e0e0; color: #333; border-color: #ccc; }
+    .regen-btn:hover, .retry-btn:hover, #scroll-down:hover { background: #d8d8d8; }
   }
 </style>
 </head>
 <body>
-<header id="title">Vault Chat</header>
+<header>
+  <span id="title">Vault Chat</span>
+  <button id="new-chat" type="button" title="Start a fresh conversation (Ctrl/Cmd+K)">New chat</button>
+</header>
 <div id="log"></div>
+<button id="scroll-down" type="button" title="Jump to newest">&#8595;</button>
+<div id="statusbar"><span id="ctx-badge"></span></div>
 <form id="form">
   <textarea id="input" rows="1" autocomplete="off"
             placeholder="Ask your vault anything...  (Enter to send, Shift+Enter for a new line)"></textarea>
@@ -243,16 +278,61 @@ function renderMarkdown(src) {
 
 let sessionId = localStorage.getItem("vault_qa_session_id") || null;
 let vaultName = "vault";
-
-fetch("/api/meta").then(r => r.json()).then(d => {
-  vaultName = d.vault_name || vaultName;
-  document.getElementById("title").textContent = `Chat with "${vaultName}"`;
-}).catch(() => {});
+let metaNotes = null;
+let lastPayload = null;          // last /api/chat body, for Retry
+const MSG_STORE = [];            // raw markdown per assistant message, for copy-all
 
 const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
+const ctxBadge = document.getElementById("ctx-badge");
+const scrollBtn = document.getElementById("scroll-down");
+
+function updateBadge(notes, chunks) {
+  if (notes == null) { ctxBadge.textContent = ""; return; }
+  ctxBadge.textContent = chunks != null
+    ? `Grounded on ${notes} vault notes (${chunks} indexed chunks)`
+    : `Grounded on ${notes} vault notes`;
+}
+
+fetch("/api/meta").then(r => r.json()).then(d => {
+  vaultName = d.vault_name || vaultName;
+  document.getElementById("title").textContent = `Chat with "${vaultName}"`;
+  if (typeof d.notes === "number") { metaNotes = d.notes; updateBadge(metaNotes, null); }
+}).catch(() => {});
+
+// --- sticky scroll / jump-to-newest anchor ---
+let stickToBottom = true;
+log.addEventListener("scroll", () => {
+  stickToBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  scrollBtn.style.display = stickToBottom ? "none" : "block";
+});
+scrollBtn.addEventListener("click", () => {
+  log.scrollTop = log.scrollHeight;
+});
+function maybeScroll() {
+  if (stickToBottom) log.scrollTop = log.scrollHeight;
+}
+
+// --- new chat (button + Ctrl/Cmd+K) ---
+function newChat() {
+  sessionId = null;
+  localStorage.removeItem("vault_qa_session_id");
+  log.innerHTML = "";
+  CODE_STORE.length = 0;
+  MSG_STORE.length = 0;
+  lastPayload = null;
+  updateBadge(metaNotes, null);
+  input.focus();
+}
+document.getElementById("new-chat").addEventListener("click", newChat);
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "o")) {
+    e.preventDefault();
+    if (!sendBtn.disabled) newChat();
+  }
+});
 
 function copyText(t) {
   if (navigator.clipboard && window.isSecureContext) {
@@ -273,12 +353,33 @@ function fallbackCopy(t) {
 }
 
 log.addEventListener("click", (e) => {
-  const btn = e.target.closest(".code-copy");
-  if (!btn) return;
-  copyText(CODE_STORE[+btn.dataset.ci] || "").then(ok => {
-    btn.textContent = ok ? "Copied" : "Failed";
-    setTimeout(() => { btn.textContent = "Copy"; }, 1500);
-  });
+  const codeBtn = e.target.closest(".code-copy");
+  if (codeBtn) {
+    copyText(CODE_STORE[+codeBtn.dataset.ci] || "").then(ok => {
+      codeBtn.textContent = ok ? "Copied" : "Failed";
+      setTimeout(() => { codeBtn.textContent = "Copy"; }, 1500);
+    });
+    return;
+  }
+  const msgBtn = e.target.closest(".msg-copy");
+  if (msgBtn) {
+    copyText(MSG_STORE[+msgBtn.dataset.mi] || "").then(ok => {
+      msgBtn.textContent = ok ? "Copied" : "Failed";
+      setTimeout(() => { msgBtn.textContent = "Copy"; }, 1500);
+    });
+    return;
+  }
+  const regenBtn = e.target.closest(".regen-btn");
+  if (regenBtn && !sendBtn.disabled) {
+    regenBtn.closest(".msg.assistant").remove();
+    ask({ regenerate: true });
+    return;
+  }
+  const retryBtn = e.target.closest(".retry-btn");
+  if (retryBtn && !sendBtn.disabled && lastPayload) {
+    retryBtn.closest(".msg.error").remove();
+    ask(lastPayload);
+  }
 });
 
 function autosize() {
@@ -298,7 +399,19 @@ function addMsg(text, cls) {
   div.className = "msg " + cls;
   div.textContent = text;
   log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  maybeScroll();
+  return div;
+}
+
+function addError(text) {
+  const div = addMsg(text, "error");
+  if (lastPayload) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "retry-btn";
+    btn.textContent = "Retry";
+    div.appendChild(btn);
+  }
   return div;
 }
 
@@ -307,15 +420,30 @@ function addProgress(text) {
   div.className = "progress";
   div.textContent = text;
   log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  maybeScroll();
   return div;
 }
 
-function addAnswer(answer, sources) {
+function addAnswer(payload) {
+  // Only the newest answer offers Regenerate.
+  const prevRegen = log.querySelector(".regen-row");
+  if (prevRegen) prevRegen.remove();
+
   const div = document.createElement("div");
   div.className = "msg assistant md";
-  div.innerHTML = renderMarkdown(answer || "");
-  if (sources && sources.length) {
+  div.innerHTML = renderMarkdown(payload.answer || "");
+
+  const mi = MSG_STORE.length;
+  MSG_STORE.push(payload.answer || "");
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "msg-copy";
+  copyBtn.dataset.mi = mi;
+  copyBtn.textContent = "Copy";
+  div.appendChild(copyBtn);
+
+  const sources = payload.sources || [];
+  if (sources.length) {
     const row = document.createElement("div");
     row.className = "sources";
     for (const s of sources) {
@@ -329,25 +457,50 @@ function addAnswer(answer, sources) {
     }
     div.appendChild(row);
   }
+
+  const metaBits = [];
+  if (payload.usage && (payload.usage.input_tokens || payload.usage.output_tokens)) {
+    metaBits.push(`↑${payload.usage.input_tokens || 0} ↓${payload.usage.output_tokens || 0} tokens`);
+  }
+  if (payload.elapsed != null) metaBits.push(`${payload.elapsed}s`);
+  if (metaBits.length) {
+    const meta = document.createElement("div");
+    meta.className = "msg-meta";
+    meta.textContent = metaBits.join(" · ");
+    div.appendChild(meta);
+  }
+
+  const regenRow = document.createElement("div");
+  regenRow.className = "regen-row";
+  const regenBtn = document.createElement("button");
+  regenBtn.type = "button";
+  regenBtn.className = "regen-btn";
+  regenBtn.textContent = "↻ Regenerate";
+  regenRow.appendChild(regenBtn);
+  div.appendChild(regenRow);
+
   log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
+  maybeScroll();
 }
 
-async function ask(message) {
+async function ask(payload) {
+  lastPayload = payload;
   sendBtn.disabled = true;
   input.disabled = true;
-  const progressEl = addProgress("thinking...");
+  const progressEl = addProgress(payload.regenerate ? "regenerating..." : "thinking...");
 
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, session_id: sessionId }),
+      body: JSON.stringify({ message: payload.message || "",
+                             regenerate: !!payload.regenerate,
+                             session_id: sessionId }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
       progressEl.remove();
-      addMsg(body.error || `Request failed (${resp.status})`, "error");
+      addError(body.error || `Request failed (${resp.status})`);
       return;
     }
 
@@ -373,27 +526,29 @@ async function ask(message) {
           else if (line.startsWith("data:")) data += line.slice(5).trim();
         }
         if (!data) continue;
-        const payload = JSON.parse(data);
+        const evt = JSON.parse(data);
 
         if (eventType === "session") {
-          sessionId = payload.session_id;
+          sessionId = evt.session_id;
           localStorage.setItem("vault_qa_session_id", sessionId);
+          if (typeof evt.notes === "number") updateBadge(evt.notes, evt.chunks);
         } else if (eventType === "progress") {
           lastProgress.remove();
-          const argStr = Object.values(payload.args || {}).join(" ");
-          lastProgress = addProgress(`${payload.tool}: ${argStr}`.trim());
+          const argStr = Object.values(evt.args || {}).join(" ");
+          lastProgress = addProgress(`${evt.tool}: ${argStr}`.trim());
         } else if (eventType === "answer") {
           lastProgress.remove();
-          addAnswer(payload.answer, payload.sources);
+          addAnswer(evt);
+          lastPayload = null;   // completed successfully; nothing to retry
         } else if (eventType === "error") {
           lastProgress.remove();
-          addMsg(payload.message || "Unknown error", "error");
+          addError(evt.message || "Unknown error");
         }
       }
     }
   } catch (err) {
     progressEl.remove();
-    addMsg("Connection error: " + err.message, "error");
+    addError("Connection error: " + err.message);
   } finally {
     sendBtn.disabled = false;
     input.disabled = false;
@@ -408,7 +563,7 @@ form.addEventListener("submit", (e) => {
   addMsg(text, "user");
   input.value = "";
   autosize();
-  ask(text);
+  ask({ message: text });
 });
 </script>
 </body>
