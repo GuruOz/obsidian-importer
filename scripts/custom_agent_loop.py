@@ -22,6 +22,25 @@ class ConfigError(RuntimeError):
 class AgentAPIError(RuntimeError):
     """Raised by run_loop() when the LLM endpoint call fails."""
 
+
+def _summarize_args(args, max_len=200):
+    """Render tool args for logging. Long string values (e.g. write_file's
+    `content`) are truncated so a large payload doesn't flood the log - just
+    enough to see what path/pattern/query the tool was actually called with."""
+    if not isinstance(args, dict):
+        return repr(args)
+    parts = []
+    for k, v in args.items():
+        if isinstance(v, str) and len(v) > max_len:
+            v = v[:max_len] + f"...[{len(v)} chars total]"
+        parts.append(f"{k}={v!r}")
+    return "{" + ", ".join(parts) + "}"
+
+
+def _looks_like_error(result):
+    return isinstance(result, str) and (result.startswith("Error") or result.startswith("Unknown function"))
+
+
 def safe_path(p: str) -> str:
     """Ensure path is within the allowed directories (VAULT_DIR or STAGING_DIR)."""
     if not os.path.isabs(p):
@@ -254,11 +273,14 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
             try:
                 args = json.loads(tool_call.function.arguments)
             except Exception as e:
+                error_msg = f"Error parsing JSON arguments: {e}"
+                print(f">> Tool Call: {func_name} - {error_msg} (raw: {tool_call.function.arguments!r})",
+                      file=sys.stderr)
                 messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name,
-                                 "content": f"Error parsing JSON arguments: {e}"})
+                                 "content": error_msg})
                 continue
 
-            print(f">> Tool Call: {func_name}", file=sys.stderr)
+            print(f">> Tool Call: {func_name}({_summarize_args(args)})", file=sys.stderr)
             if progress_cb is not None:
                 try:
                     progress_cb(func_name, args)
@@ -284,6 +306,13 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                     result = handler(args)
                 except Exception as e:
                     result = f"Error in {func_name}: {e}"
+
+            if _looks_like_error(result):
+                # This is the log line that was missing: previously a tool
+                # returning "Access denied"/"Error ..." was invisible unless the
+                # model happened to mention it - the model can also just ignore
+                # the error string and call finish() as if nothing went wrong.
+                print(f"   !! {func_name} returned an error: {result}", file=sys.stderr)
 
             messages.append({
                 "role": "tool",

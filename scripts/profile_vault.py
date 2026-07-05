@@ -210,17 +210,31 @@ def main():
         print("--profile-only set: skipping agent synthesis. Inspect the staged profile above.")
         return
 
+    # Capture the pre-run mtime (if the file already exists, e.g. a --force
+    # regeneration) so we can verify the agent actually wrote something new,
+    # rather than trusting os.path.exists() alone - which is true even when the
+    # agent silently failed (e.g. hit a sandbox "Access denied" error, ignored it,
+    # and called finish anyway) and left a stale, older Filing_Rules.md in place.
+    mtime_before = os.path.getmtime(filing_rules_path) if os.path.exists(filing_rules_path) else None
+
     print("Invoking agent to synthesize Filing_Rules.md...")
     rc, log_path = run_agent(vault_dir, staging_dir, log_dir)
 
     if rc != 0:
         sys.exit(f"Agent failed (exit {rc}). See {log_path}")
 
-    if os.path.exists(filing_rules_path):
-        print(f"Filing_Rules.md written to {filing_rules_path}")
-    else:
-        print(f"WARNING: agent exited 0 but {filing_rules_path} was not created. See {log_path}")
+    if not os.path.exists(filing_rules_path):
+        sys.exit(f"ERROR: agent exited 0 but {filing_rules_path} was not created. See {log_path}")
 
+    mtime_after = os.path.getmtime(filing_rules_path)
+    if mtime_before is not None and mtime_after <= mtime_before:
+        sys.exit(
+            f"ERROR: agent exited 0 but {filing_rules_path} was not modified (same "
+            f"mtime as before the run). It likely hit a tool error and gave up "
+            f"anyway - check {log_path} for '!! ... returned an error' lines."
+        )
+
+    print(f"Filing_Rules.md written to {filing_rules_path}")
     print(f"Full log: {log_path}")
 
 
