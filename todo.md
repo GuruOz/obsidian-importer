@@ -98,8 +98,15 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 - [x] **Chat view persistence** - switching sessions keeps rendered DOM, scroll
       position, draft text, and pending-retry state in a client view cache;
       uncached sessions (page reload) re-hydrate from GET /api/sessions/<id>,
-      which replays the transcript incl. sources/usage/elapsed. Sessions remain
-      in-memory server-side, so a server restart still clears them. *(Batch 3)*
+      which replays the transcript incl. sources/usage/elapsed. *(Batch 3)*
+- [x] **Durable chat storage** - sessions are persisted to SQLite (stdlib,
+      `session_store.py`, default `/data/sessions.db` - a `./data/vault-qa`
+      bind mount since the vault volume is read-only for this container).
+      Server memory is now only a live-session cache: every mutation is
+      written through, `VAULT_QA_MAX_SESSIONS` eviction and container
+      restarts lose nothing, and continuing an old chat revives it by
+      replaying the stored transcript into fresh model history (tool-call
+      chatter from before the restart is intentionally dropped). *(Batch 4)*
 
 ### 4. Performance & Token Telemetry
 - [ ] **Extended reasoning toggle** - render model reasoning in a collapsible
@@ -141,6 +148,7 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 
 ### 9. Deep Sidebar & History Management
 - [ ] **Global history search** - filter sidebar sessions by title/body keywords.
+      *Sessions now live in SQLite (Batch 4), so this can be a simple LIKE query.*
 - [ ] **Session pinning** - pinned sessions lock to the top of the sidebar.
 - [ ] **Time bucketing** - "Today / Yesterday / Previous 7 Days" section headers.
 

@@ -46,6 +46,9 @@ services:
       - TZ=Asia/Singapore
     volumes:
       - obsidian_only_vault:/vault:ro
+      # Durable chat history (SQLite). The vault mount is read-only, so the
+      # session store lives here instead - survives container rebuilds.
+      - ./data/vault-qa:/data
     ports:
       - "8420:8420"
     restart: unless-stopped

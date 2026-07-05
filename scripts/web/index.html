@@ -418,7 +418,9 @@ async function switchSession(id) {
       const resp = await fetch("/api/sessions/" + encodeURIComponent(id));
       if (!resp.ok) throw new Error("gone");
       const d = await resp.json();
-      updateBadge(d.notes, d.chunks);
+      // Per-session counts only exist while the session is live server-side;
+      // stored-but-idle sessions fall back to the vault-wide note count.
+      updateBadge(d.notes != null ? d.notes : metaNotes, d.chunks != null ? d.chunks : null);
       renderTranscript(d.transcript);
       log.scrollTop = log.scrollHeight;
     } catch (e) {
@@ -799,11 +801,11 @@ if (sessionId) {
       const resp = await fetch("/api/sessions/" + encodeURIComponent(sessionId));
       if (!resp.ok) throw new Error("gone");
       const d = await resp.json();
-      updateBadge(d.notes, d.chunks);
+      updateBadge(d.notes != null ? d.notes : metaNotes, d.chunks != null ? d.chunks : null);
       renderTranscript(d.transcript);
       log.scrollTop = log.scrollHeight;
     } catch (e) {
-      // Server restarted since last visit; sessions are in-memory, start fresh.
+      // Session was deleted (or the store was wiped) since last visit.
       sessionId = null;
       localStorage.removeItem("vault_qa_session_id");
     }
