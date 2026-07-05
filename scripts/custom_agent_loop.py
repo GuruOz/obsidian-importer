@@ -213,13 +213,16 @@ def make_client():
     return OpenAI(api_key=api_key, base_url=base_url), model
 
 
-def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb=None):
+def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb=None,
+             usage_out=None):
     """Drive the tool-calling loop until the model calls `finish`.
 
     `handlers` maps tool name -> callable(args_dict) -> str. Returns the finish
     call's arguments dict, or None if max_loops was exhausted. Raises AgentAPIError
     on an LLM endpoint failure. `progress_cb(tool_name, args_dict)`, if given, is
     called right before each tool is dispatched (never allowed to break the loop).
+    `usage_out`, if given a dict, accumulates input_tokens/output_tokens across
+    every API call in the loop.
     """
     for _ in range(max_loops):
         try:
@@ -231,6 +234,11 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
             )
         except Exception as e:
             raise AgentAPIError(f"API Error: {e}") from e
+
+        usage = getattr(response, "usage", None)
+        if usage_out is not None and usage is not None:
+            usage_out["input_tokens"] = usage_out.get("input_tokens", 0) + (getattr(usage, "prompt_tokens", 0) or 0)
+            usage_out["output_tokens"] = usage_out.get("output_tokens", 0) + (getattr(usage, "completion_tokens", 0) or 0)
 
         msg = response.choices[0].message
         messages.append(msg)
