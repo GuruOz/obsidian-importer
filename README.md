@@ -8,23 +8,23 @@ an Obsidian vault.
 
 ## Architecture
 
-Two deployment modes, chosen by which service(s) you start:
+Three services, one `docker compose up -d` starts all of them (no profiles - every
+service in `docker-compose.yml` runs by default):
 
-- **This machine (current setup): native Obsidian already installed.** The `pipeline`
-  service bind-mounts your real vault folder directly
-  (`C:/Users/Guru/Documents/Galaxy Brain:/vault`). Your existing desktop Obsidian app
-  already watches that folder and handles Sync - no extra container needed. Start with
-  `docker compose up -d pipeline`.
-- **Headless server, no desktop GUI.** The `obsidian` service (`linuxserver/obsidian`,
-  a browser GUI at `http://localhost:3000` for one-time Sync login) runs instead,
-  sharing a named volume with `pipeline`. It's gated behind the `headless-server`
-  compose profile so it never starts by accident on a machine that doesn't need it:
-  `docker compose --profile headless-server up -d`.
+- **`obsidian`** (`linuxserver/obsidian`): a browser GUI at `http://localhost:3000` for
+  one-time Obsidian Sync login. It owns the vault - a named Docker volume
+  (`obsidian_only_vault`), isolated from the host filesystem.
+- **`pipeline`**: runs `supercronic` continuously, firing `scripts/run-digest.sh` at
+  21:30 Asia/Singapore daily to file the nightly digest into that same vault volume.
+  Pipeline state (staging, logs, backups, ledger, MSAL token cache) lives in `./data`,
+  bind-mounted so you can inspect it from the host.
+- **`vault-qa`**: the persistent chat web UI over the vault - see "Chat with your
+  vault" below. Read-only; mounts the vault volume `:ro`.
 
-`pipeline` runs `supercronic` continuously, firing `scripts/run-digest.sh` at 21:30
-Asia/Singapore daily. Pipeline state (staging, logs, backups, ledger, MSAL token
-cache) lives in `./data`, bind-mounted so you can inspect it from
-the host.
+All three share the `obsidian_only_vault` volume and `restart: unless-stopped`, so a
+single `docker compose up -d` (step 3 below) is a one-time action - Docker keeps them
+running across crashes and host reboots from then on, and `update.sh` re-runs the same
+bare `up -d` on every future update.
 
 ## One-time setup
 
@@ -61,15 +61,15 @@ Fill in `GRAPH_CLIENT_ID` (from step 1), `DIGEST_FROM`, `DIGEST_SUBJECT_PATTERN`
 `NTFY_TOPIC` (any secret ntfy.sh topic name — subscribe to it in the ntfy phone app),
 and the agent endpoint (see step 4). Leave `DRY_RUN=1` until milestone M5.
 
-### 3. Start the pipeline
+### 3. Start everything
 
 ```
-docker compose up -d pipeline
+docker compose up -d
 ```
 
-(On a headless server with no native Obsidian install, use
-`docker compose --profile headless-server up -d` instead, then open
-http://localhost:3000 to log into Obsidian Sync once - see the Architecture section.)
+Starts all three services (see Architecture above). Open `http://localhost:3000` to
+log into Obsidian Sync once. This is the same command `update.sh` runs on every
+future update, so there's nothing further to remember here.
 
 ### 4. Configure the agent endpoint
 
