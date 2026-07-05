@@ -1,0 +1,52 @@
+You are proposing how tonight's batch of new personal emails should be triaged and filed
+into this Obsidian vault. This is a DRY RUN: you must not modify any file under the vault.
+
+{{DATE_CONTEXT}}
+
+1. Read the staged batch at /work/staging/personal/personal.md. It contains one
+   section per new email, each headed with From / Subject / Received / Message-ID,
+   followed by that email's body (long bodies are truncated with a notice).
+2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
+   the file exists - it documents the concrete folder taxonomy, daily-note format, tag
+   vocabulary, linking style, and create-vs-update rule.
+3. Read /work/staging/personal/vault_index.txt - a complete, current list of every note
+   path in the vault. Use it as your primary create-vs-update tool: shortlist existing
+   candidate notes by title and folder from the index, then Read only those specific
+   candidates to confirm. Do NOT run broad vault-wide Grep searches - the index already
+   gives you complete title coverage.
+
+TRIAGE (decide per email):
+   - SKIP (do not file) noise: marketing and promotions, newsletters and digests,
+     one-time passcodes / verification codes, automated system notifications and
+     alerts, social-media notifications, and routine receipts/order confirmations
+     with no lasting significance.
+   - FILE anything with lasting personal significance: genuine personal
+     correspondence, plans and bookings (travel, appointments, reservations),
+     finance / health / legal events, and any commitment, decision, deadline, or
+     action item - yours or someone else's - that you would want a record of.
+   - When genuinely unsure, FILE it. But record every skip with its reason.
+
+PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed.md):
+4. For each email you would FILE: determine its DATE from the Received header, and
+   decide exactly where it would be filed - which date's daily note (created if absent)
+   and which topic/project note (existing UPDATE or new CREATE, with an idempotency
+   marker <!-- personal-email:<Message-ID> --> and `[[links]]` to related notes). Use
+   the YYYY-MM-DD (MMM) date format; compute weekdays from the date itself, anchored to
+   the DATE CONTEXT above.
+   - **DATA PRESERVATION RULE (LOSSLESS)**: For emails you would file, preserve substantive details - specific identifiers (booking references, amounts, dates, ticket/order numbers), names, exact quotes, concrete action items. Only omit true noise (signatures, tracking footers, boilerplate).
+   - **NOTE GRANULARITY RULE**: Use highly specific note titles for distinct matters; never fold a distinct matter into a generic umbrella note. Create a new specific note unless the email is a direct continuation of that *exact same* matter.
+5. For each email you would SKIP: one line with its subject and the skip reason.
+6. Write your full proposal to /work/staging/personal/proposed.md - the only file you
+   may write. For each email-to-file: name the target daily note and any topic note,
+   CREATE or UPDATE, and the content that would be appended. Do not edit vault files.
+7. Work efficiently: don't re-read files you've already read; keep commentary between
+   tool calls to a minimum.
+8. Use your available tools (read, glob, grep, write) to perform this task. Do not edit
+   vault files.
+9. When finished, call the finish tool with:
+   {"status": "proposed" | "no_content", "work_date": "YYYY-MM-DD",
+    "files_touched": ["/work/staging/personal/proposed.md"], "entries_filed": N,
+    "skipped": M, "skipped_details": ["<Subject> — <reason>", ...]}
+   - entries_filed = emails that would be filed; skipped = emails triaged out;
+     skipped_details = one short line each. Always write proposed.md, even if the batch
+     is entirely skipped (then status "no_content" and record the skips there).

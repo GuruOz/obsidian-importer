@@ -21,7 +21,8 @@ COPY requirements.txt .
 RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/ ./scripts/
-COPY prompt_template.txt prompt_dry_run.txt prompt_vault_profile.txt prompt_weekly_rollup.txt ./
+COPY prompt_template.txt prompt_dry_run.txt prompt_vault_profile.txt prompt_weekly_rollup.txt \
+     prompt_personal_email.txt prompt_personal_email_dry_run.txt ./
 COPY crontab ./crontab
 
 RUN chmod +x scripts/*.sh

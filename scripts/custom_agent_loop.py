@@ -223,7 +223,13 @@ TOOLS = [
                     "work_date": {"type": "string", "description": "YYYY-MM-DD"},
                     "files_touched": {"type": "array", "items": {"type": "string"}},
                     "entries_filed": {"type": "integer"},
-                    "sections": {"type": "integer"}
+                    "sections": {"type": "integer"},
+                    "skipped": {"type": "integer", "description": "Count of source items triaged out and deliberately not filed."},
+                    "skipped_details": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "One short line per skipped item, e.g. 'Newsletter: ACME weekly — marketing'."
+                    }
                 },
                 "required": ["status"]
             }

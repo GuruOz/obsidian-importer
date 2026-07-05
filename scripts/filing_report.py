@@ -60,6 +60,8 @@ def main():
     status = result.get("status", "unknown")
     work_date = result.get("work_date", "")
     entries = result.get("entries_filed")
+    skipped = result.get("skipped")
+    skipped_details = [str(s) for s in (result.get("skipped_details") or [])]
     files = [str(p) for p in (result.get("files_touched") or [])]
 
     parts = [status]
@@ -67,6 +69,8 @@ def main():
         parts.append(f"work date {work_date}")
     if entries is not None:
         parts.append(f"{entries} entries")
+    if skipped is not None:
+        parts.append(f"{skipped} skipped")
     if files:
         shown = [note_name(p) for p in files[:MAX_NOTES_IN_SUMMARY]]
         more = len(files) - len(shown)
@@ -82,13 +86,19 @@ def main():
             line += f" — work date {work_date}"
         if entries is not None:
             line += f" — {entries} entries"
+        if skipped is not None:
+            line += f" — {skipped} skipped"
         line += f" — {links}\n"
+        # Record triage decisions as indented sub-bullets so the audit trail shows
+        # exactly what was skipped and why - you audit the judgment, not trust it.
+        for reason in skipped_details:
+            line += f"    - skipped: {reason}\n"
         os.makedirs(os.path.dirname(vault_log), exist_ok=True)
         is_new = not os.path.exists(vault_log)
         with open(vault_log, "a", encoding="utf-8") as f:
             if is_new:
                 f.write("# Filing Log\n\nOne line per pipeline run that changed the vault. "
-                        "Maintained automatically by run-digest.sh / run-weekly.sh.\n\n")
+                        "Maintained automatically by the ingestion pipeline.\n\n")
             f.write(line)
 
 

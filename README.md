@@ -15,9 +15,10 @@ service in `docker-compose.yml` runs by default):
   one-time Obsidian Sync login. It owns the vault - a named Docker volume
   (`obsidian_only_vault`), isolated from the host filesystem.
 - **`pipeline`**: runs `supercronic` continuously, firing `scripts/run-digest.sh` at
-  21:30 Asia/Singapore daily to file the nightly digest into that same vault volume.
-  Pipeline state (staging, logs, backups, ledger, MSAL token cache) lives in `./data`,
-  bind-mounted so you can inspect it from the host.
+  21:30 Asia/Singapore daily to file the nightly digest into that same vault volume,
+  and `scripts/run-ingest.sh personal` at 22:30 to triage and file your personal inbox
+  (see "Personal inbox triage" below). Pipeline state (staging, logs, backups, ledgers,
+  MSAL token cache) lives in `./data`, bind-mounted so you can inspect it from the host.
 - **`vault-qa`**: the persistent chat web UI over the vault - see "Chat with your
   vault" below. Read-only; mounts the vault volume `:ro`.
 
@@ -189,6 +190,55 @@ it skips entirely while `DRY_RUN=1`. Run one on demand with:
 docker compose exec pipeline scripts/run-weekly.sh
 ```
 
+## Personal inbox triage (second source)
+
+The nightly digest is one *ingestion source* of a small framework
+(`scripts/run-ingest.sh <source>`); the digest's own entry point,
+`scripts/run-digest.sh`, is now a thin wrapper for `run-ingest.sh digest`, so the
+cron line, ledger, and `Raw Digests/` archive are unchanged.
+
+A second source, `personal`, reads your **whole Inbox** (same read-only
+`Mail.Read` token — no new consent), lets the agent **triage** each new email, and
+files the ones worth keeping:
+
+- **Starts from now.** The first run just records a watermark set to the current
+  time and files nothing — nothing before today is ever ingested. Every run after
+  files Inbox emails received since the watermark (oldest-first, capped at
+  `PERSONAL_MAIL_MAX_PER_RUN`, default 25, so a flood drains across nights).
+- **Triage.** The agent skips marketing, newsletters, OTPs, automated
+  notifications, and routine receipts; it files personal correspondence, plans and
+  bookings, finance/health/legal events, and commitments/decisions. Every skip is
+  logged with a one-line reason to both the ntfy alert and `Raw Email/Filing Log.md`
+  — you audit the judgment, you don't trust it blindly.
+- **Dry-run by default, independently of the digest.** `PERSONAL_MAIL_DRY_RUN`
+  defaults to `1` and does **not** follow the global `DRY_RUN`, so personal mail can
+  propose to `data/staging/personal/proposed.md` for a week while the digest keeps
+  filing live. Review the proposals, then set `PERSONAL_MAIL_DRY_RUN=0`.
+- **Same safety nets as the digest:** shared vault lock (the two sources never
+  touch the vault at once), pre-run snapshot, its own ledger
+  (`data/personal_processed_ids.txt`) and watermark
+  (`data/personal_watermark.txt`) that advance only after a successful run, a
+  per-email `<!-- personal-email:<Message-ID> -->` idempotency marker, and a raw
+  archive to `Raw Email/Personal Mail - <date>.md`.
+
+It runs nightly at 22:30 (an hour after the digest). Optional overrides —
+including pointing it at a different (even local) model via
+`PERSONAL_MAIL_LLM_BASE_URL`/`PERSONAL_MAIL_LLM_MODEL` — are documented in
+`.env.example`. Run one on demand with:
+
+```
+docker compose exec pipeline scripts/run-ingest.sh personal
+```
+
+> Whole-inbox mode sends every new email body (capped) to your configured LLM
+> endpoint — broader exposure than the digest-only flow. The per-source model
+> override above is the escape hatch if you'd rather keep personal mail on a
+> different provider.
+
+**Adding a future source** (calendar, a WhatsApp-export drop folder, bookmarks,
+bank-statement CSVs) is just: a fetcher that stages markdown + `pending_ids.txt`, a
+prompt template, and a `case` entry in `run-ingest.sh`.
+
 ## Operational notes
 
 - **Updating:** run `./update.sh`. It pulls the latest code (fast-forward only — refuses
@@ -198,8 +248,9 @@ docker compose exec pipeline scripts/run-weekly.sh
   `VAULT_DIR` still resolves to a populated vault with `Filing_Rules.md` present.
 - **Windows hosts:** enable "Start Docker Desktop when you sign in" in Docker Desktop
   settings, so the always-on guarantee survives reboots.
-- **Re-authenticating Graph:** if `fetch_digest.py` exits with code 30 (and you get a
-  "Graph auth expired" ntfy alert), re-run step 5.
+- **Re-authenticating Graph:** if a fetcher exits with code 30 (and you get a
+  "Graph auth expired" ntfy alert), re-run step 5. The same `Mail.Read` token serves
+  both the digest and the personal-inbox source.
 - **Recovering from a bad run:** restore the relevant `data/backups/YYYY-MM-DD/`
   snapshot by copying it back into the `vault` volume
   (`docker compose exec pipeline rsync -a --delete /work/backups/YYYY-MM-DD/ /vault/`).
