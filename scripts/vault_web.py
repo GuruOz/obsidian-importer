@@ -139,7 +139,8 @@ def meta():
 
 @app.route("/api/sessions")
 def list_sessions():
-    return jsonify({"sessions": store.list_all()})
+    query = (request.args.get("q") or "").strip()
+    return jsonify({"sessions": store.list_all(query or None)})
 
 
 @app.route("/api/sessions/<sid>")
@@ -161,17 +162,27 @@ def get_session(sid):
 
 
 @app.route("/api/sessions/<sid>", methods=["PATCH"])
-def rename_session(sid):
+def update_session(sid):
     body = request.get_json(force=True, silent=True) or {}
-    title = (body.get("title") or "").strip()[:120]
-    if not title:
-        return jsonify({"error": "empty title"}), 400
-    if not store.rename(sid, title):
-        return jsonify({"error": "unknown session"}), 404
-    with SESSIONS_LOCK:
-        if sid in SESSIONS:
-            SESSIONS[sid]["title"] = title
-    return jsonify({"id": sid, "title": title})
+    out = {"id": sid}
+    if "title" in body:
+        title = (body.get("title") or "").strip()[:120]
+        if not title:
+            return jsonify({"error": "empty title"}), 400
+        if not store.rename(sid, title):
+            return jsonify({"error": "unknown session"}), 404
+        with SESSIONS_LOCK:
+            if sid in SESSIONS:
+                SESSIONS[sid]["title"] = title
+        out["title"] = title
+    if "pinned" in body:
+        pinned = bool(body.get("pinned"))
+        if not store.set_pinned(sid, pinned):
+            return jsonify({"error": "unknown session"}), 404
+        out["pinned"] = pinned
+    if len(out) == 1:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify(out)
 
 
 @app.route("/api/sessions/<sid>", methods=["DELETE"])

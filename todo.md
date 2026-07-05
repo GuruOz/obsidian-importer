@@ -147,10 +147,16 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
 - [ ] **Artifact version history** - scrub through iterations of a canvas document.
 
 ### 9. Deep Sidebar & History Management
-- [ ] **Global history search** - filter sidebar sessions by title/body keywords.
-      *Sessions now live in SQLite (Batch 4), so this can be a simple LIKE query.*
-- [ ] **Session pinning** - pinned sessions lock to the top of the sidebar.
-- [ ] **Time bucketing** - "Today / Yesterday / Previous 7 Days" section headers.
+- [x] **Global history search** - search box atop the sidebar filters sessions by
+      title/body keywords (debounced; GET /api/sessions?q= does an escaped
+      case-insensitive LIKE over title + stored transcript; Esc clears; stale
+      responses are dropped so fast typing can't race). *(Batch 5)*
+- [x] **Session pinning** - 📌 hover action toggles `pinned` (PATCH; SQLite column
+      with auto-migration for pre-existing DBs); pinned sessions sort first under
+      a "Pinned" header and survive chat-turn upserts. *(Batch 5)*
+- [x] **Time bucketing** - "Pinned / Today / Yesterday / Previous 7 days /
+      Previous 30 days / Older" section headers, computed client-side from
+      last_used; searching shows a flat "Results" list instead. *(Batch 5)*
 
 ### 10. Model Control & Settings Engine
 - [ ] **Live model switcher** - change `LLM_MODEL` per-session from a top-bar

@@ -29,6 +29,15 @@
   #sidebar.collapsed { display: none; }
   #sidebar-head { padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600;
                   color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
+  #sess-search {
+    display: block; width: calc(100% - 1.2rem); margin: 0 0.6rem 0.4rem;
+    padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid #3a3a3a;
+    background: #222; color: inherit; font-size: 0.82rem; font-family: inherit;
+  }
+  #sess-search:focus { outline: none; border-color: #2b5797; }
+  .sess-bucket { padding: 0.55rem 1rem 0.15rem; font-size: 0.68rem; font-weight: 600;
+                 color: #777; text-transform: uppercase; letter-spacing: 0.05em; }
+  .pin-mark { font-size: 0.68rem; flex-shrink: 0; }
   #sess-list { flex: 1; overflow-y: auto; padding-bottom: 0.5rem; }
   .sess {
     display: flex; align-items: center; gap: 0.3rem; padding: 0.45rem 0.6rem;
@@ -129,6 +138,7 @@
     body { background: #fafafa; color: #1a1a1a; }
     header { border-color: #ddd; }
     #sidebar { background: #f0f0f0; border-color: #ddd; }
+    #sess-search { background: #fff; border-color: #ccc; }
     .sess { color: #333; }
     .sess:hover { background: #e2e2e2; }
     .sess.active { background: #dcdcdc; color: #000; }
@@ -164,6 +174,7 @@
 <div id="app">
 <aside id="sidebar">
   <div id="sidebar-head">Chats</div>
+  <input id="sess-search" type="search" placeholder="Search chats..." autocomplete="off">
   <div id="sess-list"></div>
 </aside>
 <div id="main">
@@ -441,41 +452,110 @@ function markActive() {
   }
 }
 
+// "Today / Yesterday / ..." section header for a last_used unix timestamp.
+function bucketOf(ts) {
+  const now = new Date();
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const today = startOfDay(now);
+  const day = startOfDay(new Date(ts * 1000));
+  if (day >= today) return "Today";
+  if (day >= today - 864e5) return "Yesterday";
+  if (day >= today - 7 * 864e5) return "Previous 7 days";
+  if (day >= today - 30 * 864e5) return "Previous 30 days";
+  return "Older";
+}
+
+let searchQuery = "";
+
 async function refreshSidebar() {
   let sessions;
+  const q = searchQuery;
   try {
-    sessions = (await (await fetch("/api/sessions")).json()).sessions || [];
+    const url = "/api/sessions" + (q ? "?q=" + encodeURIComponent(q) : "");
+    sessions = (await (await fetch(url)).json()).sessions || [];
   } catch (e) { return; }
+  if (q !== searchQuery) return;   // a newer search superseded this response
   sessList.innerHTML = "";
   if (!sessions.length) {
     const empty = document.createElement("div");
     empty.id = "sess-empty";
-    empty.textContent = "No chats yet";
+    empty.textContent = q ? "No matching chats" : "No chats yet";
     sessList.appendChild(empty);
     return;
   }
+  let bucket = null;
   for (const s of sessions) {
+    // While searching, results come as one flat list; otherwise the server's
+    // pinned-first/recency order maps cleanly onto Pinned + time buckets.
+    const label = q ? "Results" : (s.pinned ? "Pinned" : bucketOf(s.last_used));
+    if (label !== bucket) {
+      bucket = label;
+      const head = document.createElement("div");
+      head.className = "sess-bucket";
+      head.textContent = label;
+      sessList.appendChild(head);
+    }
     const item = document.createElement("div");
     item.className = "sess";
     item.dataset.id = s.id;
+    if (s.pinned) item.dataset.pinned = "1";
+    if (s.pinned) {
+      const mark = document.createElement("span");
+      mark.className = "pin-mark";
+      mark.textContent = "\u{1f4cc}";
+      item.appendChild(mark);
+    }
     const title = document.createElement("span");
     title.className = "sess-title";
     title.textContent = s.title;
     title.title = s.title;
     const act = document.createElement("span");
     act.className = "sess-act";
+    const pin = document.createElement("button");
+    pin.type = "button"; pin.className = "sess-pin";
+    pin.title = s.pinned ? "Unpin" : "Pin";
+    pin.textContent = "\u{1f4cc}";
     const ren = document.createElement("button");
     ren.type = "button"; ren.className = "sess-rename";
     ren.title = "Rename"; ren.textContent = "✎";
     const del = document.createElement("button");
     del.type = "button"; del.className = "sess-del";
     del.title = "Delete"; del.textContent = "\u{1f5d1}";
-    act.append(ren, del);
+    act.append(pin, ren, del);
     item.append(title, act);
     sessList.appendChild(item);
   }
   markActive();
 }
+
+async function togglePin(item) {
+  try {
+    await fetch("/api/sessions/" + encodeURIComponent(item.dataset.id), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: !item.dataset.pinned }),
+    });
+  } catch (e) {}
+  refreshSidebar();
+}
+
+const searchBox = document.getElementById("sess-search");
+let searchTimer;
+searchBox.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = searchBox.value.trim();
+    refreshSidebar();
+  }, 200);
+});
+searchBox.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && searchBox.value) {
+    e.stopPropagation();
+    searchBox.value = "";
+    searchQuery = "";
+    refreshSidebar();
+  }
+});
 
 function startRename(item) {
   const titleEl = item.querySelector(".sess-title");
@@ -527,6 +607,7 @@ async function deleteSession(id) {
 sessList.addEventListener("click", (e) => {
   const item = e.target.closest(".sess");
   if (!item) return;
+  if (e.target.closest(".sess-pin")) { togglePin(item); return; }
   if (e.target.closest(".sess-rename")) { startRename(item); return; }
   if (e.target.closest(".sess-del")) { deleteSession(item.dataset.id); return; }
   if (e.target.closest(".sess-edit")) return;
