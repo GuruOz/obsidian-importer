@@ -8,14 +8,44 @@
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; height: 100vh; display: flex; flex-direction: column;
+    margin: 0; height: 100vh;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #1e1e1e; color: #e8e8e8;
   }
+  #app { display: flex; height: 100vh; }
+  #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   header { padding: 0.6rem 1rem; border-bottom: 1px solid #333; font-weight: 600;
            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-  #new-chat { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
-  #new-chat:hover { background: #454545; }
+  #title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #new-chat, #sb-toggle { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
+  #new-chat:hover, #sb-toggle:hover { background: #454545; }
+  #sb-toggle { padding: 0.35rem 0.6rem; }
+
+  /* --- conversation history sidebar --- */
+  #sidebar {
+    width: 260px; flex-shrink: 0; display: flex; flex-direction: column;
+    background: #181818; border-right: 1px solid #333; overflow: hidden;
+  }
+  #sidebar.collapsed { display: none; }
+  #sidebar-head { padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600;
+                  color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
+  #sess-list { flex: 1; overflow-y: auto; padding-bottom: 0.5rem; }
+  .sess {
+    display: flex; align-items: center; gap: 0.3rem; padding: 0.45rem 0.6rem;
+    margin: 0.1rem 0.4rem; border-radius: 8px; cursor: pointer;
+    font-size: 0.85rem; color: #ccc;
+  }
+  .sess:hover { background: #2a2a2a; }
+  .sess.active { background: #333; color: #fff; }
+  .sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-act { display: none; gap: 0.1rem; flex-shrink: 0; }
+  .sess:hover .sess-act { display: flex; }
+  .sess-act button { background: none; border: none; color: #999; cursor: pointer;
+                     padding: 0 0.2rem; font-size: 0.85rem; line-height: 1; }
+  .sess-act button:hover { color: #fff; }
+  .sess-edit { flex: 1; min-width: 0; font: inherit; background: #222; color: inherit;
+               border: 1px solid #555; border-radius: 4px; padding: 0.1rem 0.3rem; }
+  #sess-empty { padding: 0.4rem 1rem; font-size: 0.8rem; color: #666; font-style: italic; }
   #statusbar { padding: 0.15rem 1rem 0.3rem; font-size: 0.75rem; color: #888; }
   #scroll-down {
     position: fixed; right: 1.5rem; bottom: 5.5rem; display: none;
@@ -98,6 +128,15 @@
   @media (prefers-color-scheme: light) {
     body { background: #fafafa; color: #1a1a1a; }
     header { border-color: #ddd; }
+    #sidebar { background: #f0f0f0; border-color: #ddd; }
+    .sess { color: #333; }
+    .sess:hover { background: #e2e2e2; }
+    .sess.active { background: #dcdcdc; color: #000; }
+    .sess-act button { color: #777; }
+    .sess-act button:hover { color: #000; }
+    .sess-edit { background: #fff; border-color: #bbb; }
+    #sb-toggle { background: #e4e4e4; color: #1a1a1a; }
+    #sb-toggle:hover { background: #d8d8d8; }
     .msg.assistant { background: #eee; }
     .msg.error { background: #fbdede; }
     .source-chip { background: #e4e4e4; color: #245; border-color: #ccc; }
@@ -122,7 +161,14 @@
 </style>
 </head>
 <body>
+<div id="app">
+<aside id="sidebar">
+  <div id="sidebar-head">Chats</div>
+  <div id="sess-list"></div>
+</aside>
+<div id="main">
 <header>
+  <button id="sb-toggle" type="button" title="Toggle history sidebar">&#9776;</button>
   <span id="title">Vault Chat</span>
   <button id="new-chat" type="button" title="Start a fresh conversation (Ctrl/Cmd+K)">New chat</button>
 </header>
@@ -134,6 +180,8 @@
             placeholder="Ask your vault anything...  (Enter to send, Shift+Enter for a new line)"></textarea>
   <button id="send" type="submit">Send</button>
 </form>
+</div>
+</div>
 <script>
 // __MD_ENGINE_START__
 // Dependency-free markdown renderer + lightweight syntax highlighter.
@@ -288,6 +336,8 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const ctxBadge = document.getElementById("ctx-badge");
 const scrollBtn = document.getElementById("scroll-down");
+const sidebar = document.getElementById("sidebar");
+const sessList = document.getElementById("sess-list");
 
 function updateBadge(notes, chunks) {
   if (notes == null) { ctxBadge.textContent = ""; return; }
@@ -315,15 +365,189 @@ function maybeScroll() {
   if (stickToBottom) log.scrollTop = log.scrollHeight;
 }
 
+// --- session switching & view persistence ---
+// Switching sessions keeps each chat's rendered DOM, scroll position, draft
+// text, and pending-retry payload in VIEW_CACHE, so flipping back is instant
+// and lossless. CODE_STORE/MSG_STORE are global and append-only on purpose:
+// cached views hold data-ci/data-mi indexes into them, so they must never be
+// truncated while the page lives. A session missing from the cache (page
+// reload) is re-hydrated from GET /api/sessions/<id>.
+const VIEW_CACHE = new Map();
+const sessKey = () => sessionId || "__new__";
+
+function saveView() {
+  const v = { frag: document.createDocumentFragment(), scrollTop: log.scrollTop,
+              draft: input.value, badge: ctxBadge.textContent, lastPayload };
+  while (log.firstChild) v.frag.appendChild(log.firstChild);
+  VIEW_CACHE.set(sessKey(), v);
+}
+
+function resetView() {
+  log.innerHTML = "";
+  input.value = "";
+  autosize();
+  lastPayload = null;
+}
+
+function renderTranscript(entries) {
+  for (const e of entries || []) {
+    if (e.type === "user") addMsg(e.text, "user");
+    else if (e.type === "answer") addAnswer(e);
+  }
+}
+
+async function switchSession(id) {
+  if (sendBtn.disabled || id === sessionId) return;
+  saveView();
+  sessionId = id;
+  localStorage.setItem("vault_qa_session_id", sessionId);
+  markActive();
+  const v = VIEW_CACHE.get(id);
+  if (v) {
+    VIEW_CACHE.delete(id);           // frag is consumed; re-saved on next switch
+    resetView();
+    log.appendChild(v.frag);
+    input.value = v.draft;
+    autosize();
+    ctxBadge.textContent = v.badge;
+    lastPayload = v.lastPayload;
+    log.scrollTop = v.scrollTop;
+  } else {
+    resetView();
+    try {
+      const resp = await fetch("/api/sessions/" + encodeURIComponent(id));
+      if (!resp.ok) throw new Error("gone");
+      const d = await resp.json();
+      updateBadge(d.notes, d.chunks);
+      renderTranscript(d.transcript);
+      log.scrollTop = log.scrollHeight;
+    } catch (e) {
+      // Session no longer exists server-side (restart/eviction): fall back to
+      // a fresh chat rather than showing a dead transcript.
+      newChat();
+      refreshSidebar();
+      return;
+    }
+  }
+  input.focus();
+}
+
+// --- sidebar ---
+function markActive() {
+  for (const el of sessList.querySelectorAll(".sess")) {
+    el.classList.toggle("active", el.dataset.id === sessionId);
+  }
+}
+
+async function refreshSidebar() {
+  let sessions;
+  try {
+    sessions = (await (await fetch("/api/sessions")).json()).sessions || [];
+  } catch (e) { return; }
+  sessList.innerHTML = "";
+  if (!sessions.length) {
+    const empty = document.createElement("div");
+    empty.id = "sess-empty";
+    empty.textContent = "No chats yet";
+    sessList.appendChild(empty);
+    return;
+  }
+  for (const s of sessions) {
+    const item = document.createElement("div");
+    item.className = "sess";
+    item.dataset.id = s.id;
+    const title = document.createElement("span");
+    title.className = "sess-title";
+    title.textContent = s.title;
+    title.title = s.title;
+    const act = document.createElement("span");
+    act.className = "sess-act";
+    const ren = document.createElement("button");
+    ren.type = "button"; ren.className = "sess-rename";
+    ren.title = "Rename"; ren.textContent = "✎";
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "sess-del";
+    del.title = "Delete"; del.textContent = "\u{1f5d1}";
+    act.append(ren, del);
+    item.append(title, act);
+    sessList.appendChild(item);
+  }
+  markActive();
+}
+
+function startRename(item) {
+  const titleEl = item.querySelector(".sess-title");
+  if (!titleEl) return;
+  const box = document.createElement("input");
+  box.className = "sess-edit";
+  box.value = titleEl.textContent;
+  titleEl.replaceWith(box);
+  box.focus();
+  box.select();
+  let done = false;
+  const commit = async () => {
+    if (done) return;
+    done = true;
+    const title = box.value.trim();
+    if (title && title !== titleEl.textContent) {
+      try {
+        await fetch("/api/sessions/" + encodeURIComponent(item.dataset.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title }),
+        });
+      } catch (e) {}
+    }
+    refreshSidebar();
+  };
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { done = true; refreshSidebar(); }
+  });
+  box.addEventListener("blur", commit);
+}
+
+async function deleteSession(id) {
+  if (!confirm("Delete this chat?")) return;
+  try {
+    const resp = await fetch("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      alert(body.error || "Delete failed");
+      return;
+    }
+  } catch (e) { return; }
+  VIEW_CACHE.delete(id);
+  if (id === sessionId) newChat();
+  refreshSidebar();
+}
+
+sessList.addEventListener("click", (e) => {
+  const item = e.target.closest(".sess");
+  if (!item) return;
+  if (e.target.closest(".sess-rename")) { startRename(item); return; }
+  if (e.target.closest(".sess-del")) { deleteSession(item.dataset.id); return; }
+  if (e.target.closest(".sess-edit")) return;
+  switchSession(item.dataset.id);
+});
+
+document.getElementById("sb-toggle").addEventListener("click", () => {
+  sidebar.classList.toggle("collapsed");
+  localStorage.setItem("vault_qa_sidebar",
+                       sidebar.classList.contains("collapsed") ? "0" : "1");
+});
+if (localStorage.getItem("vault_qa_sidebar") === "0") sidebar.classList.add("collapsed");
+
 // --- new chat (button + Ctrl/Cmd+K) ---
 function newChat() {
+  if (sendBtn.disabled) return;
+  if (sessionId) saveView();
   sessionId = null;
   localStorage.removeItem("vault_qa_session_id");
-  log.innerHTML = "";
-  CODE_STORE.length = 0;
-  MSG_STORE.length = 0;
-  lastPayload = null;
+  VIEW_CACHE.delete("__new__");
+  resetView();
   updateBadge(metaNotes, null);
+  markActive();
   input.focus();
 }
 document.getElementById("new-chat").addEventListener("click", newChat);
@@ -553,6 +777,7 @@ async function ask(payload) {
     sendBtn.disabled = false;
     input.disabled = false;
     input.focus();
+    refreshSidebar();   // new session / fresh title / recency reorder
   }
 }
 
@@ -565,6 +790,25 @@ form.addEventListener("submit", (e) => {
   autosize();
   ask({ message: text });
 });
+
+// --- initial load: populate sidebar and re-hydrate the last-open session ---
+refreshSidebar();
+if (sessionId) {
+  (async () => {
+    try {
+      const resp = await fetch("/api/sessions/" + encodeURIComponent(sessionId));
+      if (!resp.ok) throw new Error("gone");
+      const d = await resp.json();
+      updateBadge(d.notes, d.chunks);
+      renderTranscript(d.transcript);
+      log.scrollTop = log.scrollHeight;
+    } catch (e) {
+      // Server restarted since last visit; sessions are in-memory, start fresh.
+      sessionId = null;
+      localStorage.removeItem("vault_qa_session_id");
+    }
+  })();
+}
 </script>
 </body>
 </html>

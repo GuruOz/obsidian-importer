@@ -87,12 +87,19 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
       `followups: [str]` field.*
 
 ### 3. Session & Sidebar Management
-- [ ] **Conversation history sidebar** - collapsible panel listing past sessions with
-      auto-generated titles from the first message.
-- [ ] **Session operations** - rename / delete sessions from the sidebar.
-- [ ] **Chat view persistence** - switching sessions preserves scroll position,
-      rendered messages, and unsubmitted draft text. *Server already keeps per-session
-      history in memory; needs a GET endpoint to re-hydrate a session's transcript.*
+- [x] **Conversation history sidebar** - collapsible panel (☰, state persisted)
+      listing sessions newest-first with auto-generated titles from the first
+      message; server keeps a display-layer `transcript` per session, exposed via
+      GET /api/sessions. *(Batch 3)*
+- [x] **Session operations** - inline rename (✎ -> input, Enter/blur commits, Esc
+      cancels; PATCH /api/sessions/<id>) and delete (🗑 + confirm; DELETE, 409 if a
+      request is in flight; deleting the open chat falls back to a fresh one).
+      *(Batch 3)*
+- [x] **Chat view persistence** - switching sessions keeps rendered DOM, scroll
+      position, draft text, and pending-retry state in a client view cache;
+      uncached sessions (page reload) re-hydrate from GET /api/sessions/<id>,
+      which replays the transcript incl. sources/usage/elapsed. Sessions remain
+      in-memory server-side, so a server restart still clears them. *(Batch 3)*
 
 ### 4. Performance & Token Telemetry
 - [ ] **Extended reasoning toggle** - render model reasoning in a collapsible

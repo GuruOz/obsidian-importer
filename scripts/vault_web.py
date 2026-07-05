@@ -46,6 +46,12 @@ def _new_session():
     system_content = vault_qa.build_system_prompt(index, lexical_index=lex)
     return {
         "messages": [{"role": "system", "content": system_content}],
+        # Display-layer history for the sidebar/re-hydration endpoints: a list of
+        # {"type": "user", "text": ...} and {"type": "answer", ...answer payload}
+        # entries. Unlike "messages" it is never capped and holds no tool chatter.
+        "transcript": [],
+        "title": None,
+        "created": time.time(),
         "lexical_index": lex,
         "note_count": len(index),
         "chunk_count": len(lex.chunks),
@@ -94,6 +100,62 @@ def meta():
     })
 
 
+def _session_summary(sid, s):
+    return {
+        "id": sid,
+        "title": s["title"] or "New chat",
+        "created": s["created"],
+        "last_used": s["last_used"],
+        "turns": sum(1 for e in s["transcript"] if e["type"] == "user"),
+    }
+
+
+@app.route("/api/sessions")
+def list_sessions():
+    with SESSIONS_LOCK:
+        items = [_session_summary(sid, s) for sid, s in SESSIONS.items()]
+    items.sort(key=lambda x: x["last_used"], reverse=True)
+    return jsonify({"sessions": items})
+
+
+@app.route("/api/sessions/<sid>")
+def get_session(sid):
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(sid)
+        if s is None:
+            return jsonify({"error": "unknown session"}), 404
+        return jsonify({**_session_summary(sid, s),
+                        "transcript": list(s["transcript"]),
+                        "notes": s["note_count"], "chunks": s["chunk_count"]})
+
+
+@app.route("/api/sessions/<sid>", methods=["PATCH"])
+def rename_session(sid):
+    body = request.get_json(force=True, silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "empty title"}), 400
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(sid)
+        if s is None:
+            return jsonify({"error": "unknown session"}), 404
+        s["title"] = title[:120]
+        return jsonify(_session_summary(sid, s))
+
+
+@app.route("/api/sessions/<sid>", methods=["DELETE"])
+def delete_session(sid):
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(sid)
+        if s is None:
+            return jsonify({"error": "unknown session"}), 404
+        if not s["lock"].acquire(blocking=False):
+            return jsonify({"error": "a request is in flight for this session"}), 409
+        del SESSIONS[sid]
+        s["lock"].release()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat():
     body = request.get_json(force=True, silent=True) or {}
@@ -128,6 +190,7 @@ def chat():
                 payload = dict(finish_args)
                 payload["usage"] = usage
                 payload["elapsed"] = round(time.time() - t0, 1)
+                session["transcript"].append({"type": "answer", **payload})
                 q.put(("answer", payload))
         except cal.AgentAPIError as e:
             q.put(("error", {"message": str(e)}))
@@ -149,9 +212,15 @@ def chat():
                 session["lock"].release()
                 return jsonify({"error": "nothing to regenerate in this session"}), 400
             del session["messages"][user_idxs[-1] + 1:]
+            t_idxs = [i for i, e in enumerate(session["transcript"]) if e["type"] == "user"]
+            if t_idxs:
+                del session["transcript"][t_idxs[-1] + 1:]
         else:
             session["messages"].append({"role": "user", "content": user_message})
             _cap_history(session["messages"], MAX_TURNS)
+            session["transcript"].append({"type": "user", "text": user_message})
+            if session["title"] is None:
+                session["title"] = " ".join(user_message.split())[:80]
         threading.Thread(target=worker, daemon=True).start()
     except Exception:
         session["lock"].release()
