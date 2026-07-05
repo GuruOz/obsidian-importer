@@ -84,15 +84,19 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
       vault answers.)*
 
 ### 2. Knowledge Base & Grounding
-- [ ] **Inline citations** - clickable [1]-style footnotes opening a panel with the
-      source note title + snippet. *Needs the finish tool schema extended so the
-      model returns snippet-level citations, not just note paths.*
+- [x] **Inline citations** - finish schema extended with `citations:
+      [{path, snippet}]`; [n] markers in the answer become clickable sups (DOM
+      post-pass over the rendered markdown, skipping code blocks) that toggle a
+      panel with the note title (obsidian:// link) + quoted snippet. Persists /
+      hydrates via the stored transcript; Markdown export lists them; ask_vault
+      CLI prints them. *(Batch 7)*
 - [x] **Active context indicator** - badge under the chat showing vault note count
       (from /api/meta on load) and per-session note + chunk counts (from the
       session SSE event). *(Batch 2)*
-- [ ] **Suggested prompts** - 2-3 follow-up question chips after each answer;
-      clicking submits. *Needs the finish tool schema extended with a
-      `followups: [str]` field.*
+- [x] **Suggested prompts** - finish schema extended with `followups: [str]`;
+      2-3 chips render under the newest answer only (older rows are removed,
+      same pattern as Regenerate) and clicking one submits it as the next user
+      message. *(Batch 7)*
 
 ### 3. Session & Sidebar Management
 - [x] **Conversation history sidebar** - collapsible panel (☰, state persisted)

@@ -21,6 +21,24 @@ FINISH_TOOL = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Vault-relative paths of the notes the answer was drawn from."
+                },
+                "citations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Vault-relative path of the cited note."},
+                            "snippet": {"type": "string", "description": "Short verbatim excerpt (<=300 chars) the fact was drawn from."}
+                        },
+                        "required": ["path", "snippet"]
+                    },
+                    "description": ("Numbered by position: a [1] marker in the answer refers to "
+                                    "citations[0], [2] to citations[1], and so on.")
+                },
+                "followups": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "2-3 short follow-up questions the user might plausibly ask next."
                 }
             },
             "required": ["answer"]
@@ -76,7 +94,11 @@ def build_system_prompt(index, lexical_index=None):
         "grep_search for identifiers (ticket numbers, names) that titles won't surface. "
         "Quote specifics (dates, ticket numbers, decisions) rather than generalities, and "
         "say plainly when the vault doesn't contain an answer. When done, call finish with "
-        "the answer and the source note paths.\n\n"
+        "the answer and the source note paths. Where the answer states a specific fact taken "
+        "from a note, put a numeric marker like [1] right after it and supply a matching entry "
+        "in finish's citations array (note path + the exact snippet the fact came from), "
+        "numbered in order of first appearance. Also supply 2-3 short followups: natural "
+        "next questions the user might ask about this vault.\n\n"
         f"Vault index ({len(index)} notes):\n" + "\n".join(index)
     )
 

@@ -59,6 +59,12 @@ def main():
         print("\nSources:")
         for s in sources:
             print(f"  - {s}")
+    citations = finish_args.get("citations") or []
+    if citations:
+        print("\nCitations:")  # the [n] markers in the answer refer to these
+        for i, c in enumerate(citations, 1):
+            snippet = " ".join((c.get("snippet") or "").split())
+            print(f"  [{i}] {c.get('path', '?')} - {snippet}")
 
 
 if __name__ == "__main__":

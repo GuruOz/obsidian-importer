@@ -114,6 +114,18 @@
     background: #3a3a3a; color: #cfe; text-decoration: none; border: 1px solid #4a4a4a;
   }
   .source-chip:hover { background: #454545; }
+  sup.cite { cursor: pointer; color: #8ab4f8; font-size: 0.75em; user-select: none; }
+  sup.cite:hover { text-decoration: underline; }
+  .cite-panel { margin-top: 0.5rem; padding: 0.45rem 0.7rem; border-left: 3px solid #2b5797;
+                background: #262626; border-radius: 6px; font-size: 0.83rem; }
+  .cite-title { font-weight: 600; }
+  .cite-title a { color: #8ab4f8; text-decoration: none; }
+  .cite-title a:hover { text-decoration: underline; }
+  .cite-snip { margin-top: 0.25rem; color: #bbb; font-style: italic; }
+  .followups { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .fu-chip { font-size: 0.8rem; padding: 0.25rem 0.7rem; border-radius: 999px;
+             background: none; color: #8ab4f8; border: 1px solid #3d5a86; text-align: left; }
+  .fu-chip:hover { background: #2b3b55; }
   form { display: flex; gap: 0.5rem; padding: 0.75rem; border-top: 1px solid #333; align-items: flex-end; }
   textarea#input {
     flex: 1; padding: 0.6rem 0.8rem; border-radius: 8px; border: 1px solid #444;
@@ -175,6 +187,12 @@
     .msg.assistant { background: #eee; }
     .msg.error { background: #fbdede; }
     .source-chip { background: #e4e4e4; color: #245; border-color: #ccc; }
+    sup.cite { color: #1a56b0; }
+    .cite-panel { background: #f0f0f0; border-left-color: #1a56b0; }
+    .cite-title a { color: #1a56b0; }
+    .cite-snip { color: #555; }
+    .fu-chip { color: #1a56b0; border-color: #9db8dd; }
+    .fu-chip:hover { background: #e2ebf7; }
     textarea#input { background: #fff; color: #1a1a1a; border-color: #ccc; }
     form { border-color: #ddd; }
     .md blockquote { border-color: #bbb; color: #555; }
@@ -374,6 +392,7 @@ let vaultName = "vault";
 let metaNotes = null;
 let lastPayload = null;          // last /api/chat body, for Retry
 const MSG_STORE = [];            // raw markdown per assistant message, for copy-all
+const CITE_STORE = [];           // citations array per assistant message, for the cite panel
 
 const log = document.getElementById("log");
 const form = document.getElementById("form");
@@ -413,9 +432,9 @@ function maybeScroll() {
 // --- session switching & view persistence ---
 // Switching sessions keeps each chat's rendered DOM, scroll position, draft
 // text, and pending-retry payload in VIEW_CACHE, so flipping back is instant
-// and lossless. CODE_STORE/MSG_STORE are global and append-only on purpose:
-// cached views hold data-ci/data-mi indexes into them, so they must never be
-// truncated while the page lives. A session missing from the cache (page
+// and lossless. CODE_STORE/MSG_STORE/CITE_STORE are global and append-only on
+// purpose: cached views hold data-ci/data-mi/data-cs indexes into them, so
+// they must never be truncated while the page lives. A session missing from the cache (page
 // reload) is re-hydrated from GET /api/sessions/<id>.
 const VIEW_CACHE = new Map();
 const sessKey = () => sessionId || "__new__";
@@ -710,6 +729,19 @@ log.addEventListener("click", (e) => {
     });
     return;
   }
+  const cite = e.target.closest("sup.cite");
+  if (cite) {
+    toggleCitePanel(cite);
+    return;
+  }
+  const fuChip = e.target.closest(".fu-chip");
+  if (fuChip && !sendBtn.disabled) {
+    const question = fuChip.textContent;
+    fuChip.closest(".followups").remove();
+    addMsg(question, "user");
+    ask({ message: question });
+    return;
+  }
   const regenBtn = e.target.closest(".regen-btn");
   if (regenBtn && !sendBtn.disabled) {
     regenBtn.closest(".msg.assistant").remove();
@@ -767,6 +799,11 @@ function transcriptToMarkdown(d) {
     } else if (e.type === "answer") {
       lines.push("## Assistant", "", e.answer || "");
       if (e.sources && e.sources.length) lines.push("", "**Sources:** " + e.sources.join(", "));
+      if (e.citations && e.citations.length) {
+        lines.push("", "**Citations:**");
+        e.citations.forEach((c, i) =>
+          lines.push(`${i + 1}. ${c.path || "?"} — ${(c.snippet || "").replace(/\s+/g, " ")}`));
+      }
       lines.push("");
     }
   }
@@ -839,14 +876,91 @@ function addProgress(text) {
   return div;
 }
 
+function markCitations(root, count) {
+  // Turn [n] tokens (1 <= n <= count) in the rendered answer into clickable
+  // citation markers. DOM post-pass so the string-based markdown engine stays
+  // untouched; PRE/CODE subtrees are skipped so code samples keep literal [n].
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement.closest("pre, code")
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const texts = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    if (/\[\d{1,2}\]/.test(node.nodeValue)) texts.push(node);
+  }
+  for (const t of texts) {
+    const frag = document.createDocumentFragment();
+    const re = /\[(\d{1,2})\]/g;
+    let last = 0, m;
+    while ((m = re.exec(t.nodeValue))) {
+      const num = +m[1];
+      if (num < 1 || num > count) continue;   // not a citation: leave as text
+      frag.appendChild(document.createTextNode(t.nodeValue.slice(last, m.index)));
+      const sup = document.createElement("sup");
+      sup.className = "cite";
+      sup.dataset.n = num;
+      sup.title = "Show citation";
+      sup.textContent = "[" + num + "]";
+      frag.appendChild(sup);
+      last = m.index + m[0].length;
+    }
+    if (!last) continue;
+    frag.appendChild(document.createTextNode(t.nodeValue.slice(last)));
+    t.replaceWith(frag);
+  }
+}
+
+function toggleCitePanel(marker) {
+  const msg = marker.closest(".msg.assistant");
+  const cites = CITE_STORE[+msg.dataset.cs] || [];
+  const c = cites[+marker.dataset.n - 1];
+  if (!c) return;
+  const existing = msg.querySelector(".cite-panel");
+  if (existing) {
+    const same = existing.dataset.n === marker.dataset.n;
+    existing.remove();
+    if (same) return;                          // second click on same marker: close
+  }
+  const panel = document.createElement("div");
+  panel.className = "cite-panel";
+  panel.dataset.n = marker.dataset.n;
+  const title = document.createElement("div");
+  title.className = "cite-title";
+  const a = document.createElement("a");
+  const notePath = (c.path || "").replace(/\.md$/, "");
+  a.href = `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(notePath)}`;
+  a.textContent = `[${marker.dataset.n}] ` + (notePath.split("/").pop() || "note");
+  a.title = c.path || "";
+  title.appendChild(a);
+  panel.appendChild(title);
+  if (c.snippet) {
+    const snip = document.createElement("div");
+    snip.className = "cite-snip";
+    snip.textContent = "“" + c.snippet + "”";
+    panel.appendChild(snip);
+  }
+  // Right below the answer text, above the sources/meta/feedback footer rows.
+  msg.insertBefore(panel, msg.querySelector(".sources, .msg-meta, .fb-row"));
+}
+
 function addAnswer(payload) {
-  // Only the newest answer offers Regenerate.
+  // Only the newest answer offers Regenerate and follow-up chips.
   const prevRegen = log.querySelector(".regen-row");
   if (prevRegen) prevRegen.remove();
+  const prevFu = log.querySelector(".followups");
+  if (prevFu) prevFu.remove();
 
   const div = document.createElement("div");
   div.className = "msg assistant md";
   div.innerHTML = renderMarkdown(payload.answer || "");
+
+  const citations = payload.citations || [];
+  if (citations.length) {
+    div.dataset.cs = CITE_STORE.length;
+    CITE_STORE.push(citations);
+    markCitations(div, citations.length);
+  }
 
   const mi = MSG_STORE.length;
   MSG_STORE.push(payload.answer || "");
@@ -897,6 +1011,20 @@ function addAnswer(payload) {
     fbRow.appendChild(btn);
   }
   div.appendChild(fbRow);
+
+  const followups = payload.followups || [];
+  if (followups.length) {
+    const fuRow = document.createElement("div");
+    fuRow.className = "followups";
+    for (const q of followups.slice(0, 3)) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "fu-chip";
+      chip.textContent = q;
+      fuRow.appendChild(chip);
+    }
+    div.appendChild(fuRow);
+  }
 
   const regenRow = document.createElement("div");
   regenRow.className = "regen-row";
