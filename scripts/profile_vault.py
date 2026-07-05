@@ -158,8 +158,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--samples-per-folder", type=int, default=3,
                          help="Base number of files to sample per folder.")
-    parser.add_argument("--max-samples", type=int, default=60,
-                         help="Hard cap on total files sampled across the vault.")
+    parser.add_argument("--max-samples", type=int, default=200,
+                         help="Hard cap on total files sampled across the vault. Raise this "
+                              "for larger vaults (a few hundred is fine for most LLM context "
+                              "windows at the default --max-chars-per-file); lower it if the "
+                              "profiler starts hitting the model's context limit.")
     parser.add_argument("--max-chars-per-file", type=int, default=800)
     parser.add_argument("--priority-folders", default="Work,Technology,Home Lab",
                          help="Comma-separated folder names (matched against any path "
