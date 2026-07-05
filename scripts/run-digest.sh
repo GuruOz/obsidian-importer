@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
 # Orchestrator entry point. Fired nightly by supercronic (see /app/crontab), or run
 # manually with: docker compose exec pipeline /app/scripts/run-digest.sh
+#
+# Optional work-date override (for backfilling a specific day):
+#   scripts/run-digest.sh 2026-07-03        # or: WORK_DATE=2026-07-03 scripts/run-digest.sh
+# Without it, the agent is told today's date and infers the digest's work date
+# from the digest content, as before. This is the only place a date enters the
+# run - the prompt itself is date-agnostic ({{DATE_CONTEXT}} placeholder).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOTIFY="${SCRIPT_DIR}/notify.sh"
+
+WORK_DATE="${1:-${WORK_DATE:-}}"
+if [ -n "$WORK_DATE" ] && ! [[ "$WORK_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "run-digest.sh: invalid work date '$WORK_DATE' - expected YYYY-MM-DD." >&2
+    exit 1
+fi
+export WORK_DATE
 
 VAULT_DIR="${VAULT_DIR:-/vault}"
 WORKDIR="${WORKDIR:-/work}"

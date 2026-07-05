@@ -23,6 +23,15 @@ class AgentAPIError(RuntimeError):
     """Raised by run_loop() when the LLM endpoint call fails."""
 
 
+class AgentCancelled(RuntimeError):
+    """Raised by run_loop() when the caller's cancel_event fires mid-run.
+    Carries whatever answer text had already streamed (possibly empty) so the
+    caller can solidify the partial response."""
+    def __init__(self, partial_answer=""):
+        super().__init__("cancelled by caller")
+        self.partial_answer = partial_answer
+
+
 def _summarize_args(args, max_len=200):
     """Render tool args for logging. Long string values (e.g. write_file's
     `content`) are truncated so a large payload doesn't flood the log - just
@@ -222,6 +231,32 @@ TOOLS = [
     }
 ]
 
+def render_prompt(prompt):
+    """Substitute the {{DATE_CONTEXT}} placeholder, if present.
+
+    This is the single place dates enter the prompt: today's date + weekday are
+    always injected (the model has no reliable idea what 'today' is otherwise),
+    and an optional WORK_DATE env var (YYYY-MM-DD) forces the filing date instead
+    of letting the agent infer it from the digest - for backfilling a specific day.
+    Prompts without the placeholder (profiler, weekly rollup) pass through
+    untouched, and WORK_DATE is ignored for them.
+    """
+    if "{{DATE_CONTEXT}}" not in prompt:
+        return prompt
+    now = datetime.now()
+    ctx = f"DATE CONTEXT: today is {now:%Y-%m-%d} ({now:%A})."
+    work_date = os.environ.get("WORK_DATE", "").strip()
+    if work_date:
+        try:
+            wd = datetime.strptime(work_date, "%Y-%m-%d")
+        except ValueError:
+            raise ConfigError(f"WORK_DATE must be YYYY-MM-DD, got {work_date!r}")
+        ctx += (f" The WORK DATE for this digest is {wd:%Y-%m-%d} ({wd:%A}) - file under "
+                "this date and use it in the idempotency marker; do not infer a "
+                "different date from the digest.")
+    return prompt.replace("{{DATE_CONTEXT}}", ctx)
+
+
 def make_client():
     """Build the OpenAI-compatible client from LLM_* env vars, or raise ConfigError."""
     api_key = os.environ.get("LLM_API_KEY")
@@ -232,8 +267,141 @@ def make_client():
     return OpenAI(api_key=api_key, base_url=base_url), model
 
 
+class _AnswerExtractor:
+    """Incrementally extracts the string value of the top-level "answer" key
+    from the finish tool call's JSON arguments as they stream in, emitting
+    decoded text fragments via emit(). Best-effort: if the model orders the
+    keys differently or the JSON is odd, nothing is emitted and the caller
+    falls back to the fully parsed args at the end of the stream."""
+
+    _ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
+                "n": "\n", "r": "\r", "t": "\t"}
+
+    def __init__(self, emit=None):
+        self.emit = emit
+        self.text = ""
+        self._buf = ""
+        self._state = "seek"
+
+    def feed(self, fragment):
+        self._buf += fragment
+        if self._state == "seek":
+            m = re.search(r'"answer"\s*:\s*"', self._buf)
+            if m is None:
+                self._buf = self._buf[-16:]  # keep enough tail to match a key split across chunks
+                return
+            self._buf = self._buf[m.end():]
+            self._state = "instring"
+        if self._state != "instring":
+            return
+        out = []
+        i, n = 0, len(self._buf)
+        while i < n:
+            c = self._buf[i]
+            if c == '"':
+                self._state = "done"
+                i += 1
+                break
+            if c == "\\":
+                if i + 1 >= n:
+                    break  # escape split across chunks; resume on next feed
+                e = self._buf[i + 1]
+                if e == "u":
+                    if i + 6 > n:
+                        break
+                    try:
+                        out.append(chr(int(self._buf[i + 2:i + 6], 16)))
+                    except ValueError:
+                        pass
+                    i += 6
+                else:
+                    out.append(self._ESCAPES.get(e, e))
+                    i += 2
+            else:
+                out.append(c)
+                i += 1
+        self._buf = self._buf[i:]
+        if out:
+            piece = "".join(out)
+            self.text += piece
+            if self.emit is not None:
+                try:
+                    self.emit(piece)
+                except Exception:
+                    pass  # streaming must never break the agent loop
+
+
+def _add_usage(usage_out, usage):
+    if usage_out is not None and usage is not None:
+        usage_out["input_tokens"] = usage_out.get("input_tokens", 0) + (getattr(usage, "prompt_tokens", 0) or 0)
+        usage_out["output_tokens"] = usage_out.get("output_tokens", 0) + (getattr(usage, "completion_tokens", 0) or 0)
+
+
+def _stream_completion(client, model, messages, tools, cancel_event, extractor, usage_out):
+    """One streamed chat.completions call. Returns (assistant_msg_dict, calls,
+    cancelled) where calls is [(id, name, arguments_json_str)] in index order.
+    finish-call argument deltas are fed to `extractor` as they arrive. On
+    cancellation the partial tool calls are discarded (calls comes back empty)."""
+    kwargs = dict(model=model, messages=messages, tools=tools,
+                  tool_choice="auto", stream=True)
+    try:
+        try:
+            stream = client.chat.completions.create(
+                stream_options={"include_usage": True}, **kwargs)
+        except Exception as e:
+            if "stream_options" not in str(e):
+                raise
+            stream = client.chat.completions.create(**kwargs)  # provider doesn't support it
+    except Exception as e:
+        raise AgentAPIError(f"API Error: {e}") from e
+
+    content_parts, by_index, cancelled = [], {}, False
+    try:
+        for chunk in stream:
+            _add_usage(usage_out, getattr(chunk, "usage", None))
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                break
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if getattr(delta, "content", None):
+                content_parts.append(delta.content)
+            for tc in (getattr(delta, "tool_calls", None) or []):
+                entry = by_index.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
+                if getattr(tc, "id", None):
+                    entry["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        entry["name"] += fn.name
+                    if getattr(fn, "arguments", None):
+                        entry["arguments"] += fn.arguments
+                        if entry["name"] == "finish":
+                            extractor.feed(fn.arguments)
+    except Exception as e:
+        raise AgentAPIError(f"API Error mid-stream: {e}") from e
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    if cancelled:
+        return {"role": "assistant", "content": "".join(content_parts) or None}, [], True
+    calls = [(v["id"], v["name"], v["arguments"]) for _, v in sorted(by_index.items())]
+    msg = {"role": "assistant", "content": "".join(content_parts) or None}
+    if calls:
+        msg["tool_calls"] = [{"id": cid, "type": "function",
+                              "function": {"name": name, "arguments": args}}
+                             for cid, name, args in calls]
+    return msg, calls, False
+
+
 def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb=None,
-             usage_out=None):
+             usage_out=None, stream_cb=None, cancel_event=None):
     """Drive the tool-calling loop until the model calls `finish`.
 
     `handlers` maps tool name -> callable(args_dict) -> str. Returns the finish
@@ -242,41 +410,60 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
     called right before each tool is dispatched (never allowed to break the loop).
     `usage_out`, if given a dict, accumulates input_tokens/output_tokens across
     every API call in the loop.
+
+    `stream_cb(text)` and/or `cancel_event` (a threading.Event) switch the API
+    calls to streaming mode: stream_cb receives the finish answer's text
+    incrementally as it is generated, and a set cancel_event aborts the run at
+    the next chunk/tool boundary by raising AgentCancelled (carrying any partial
+    answer text). The message history is left valid for a follow-up turn either
+    way. Callers that pass neither get the original non-streaming behavior.
     """
+    use_stream = stream_cb is not None or cancel_event is not None
+    extractor = _AnswerExtractor(stream_cb)
+
     for _ in range(max_loops):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                tools=tools,
-                tool_choice="auto"
-            )
-        except Exception as e:
-            raise AgentAPIError(f"API Error: {e}") from e
+        if cancel_event is not None and cancel_event.is_set():
+            raise AgentCancelled(extractor.text)
 
-        usage = getattr(response, "usage", None)
-        if usage_out is not None and usage is not None:
-            usage_out["input_tokens"] = usage_out.get("input_tokens", 0) + (getattr(usage, "prompt_tokens", 0) or 0)
-            usage_out["output_tokens"] = usage_out.get("output_tokens", 0) + (getattr(usage, "completion_tokens", 0) or 0)
+        if use_stream:
+            msg, calls, cancelled = _stream_completion(
+                client, model, messages, tools, cancel_event, extractor, usage_out)
+            if cancelled:
+                # Discard the aborted completion's partial tool calls; keep the
+                # partial answer as plain assistant text so the history stays valid.
+                if extractor.text:
+                    messages.append({"role": "assistant", "content": extractor.text})
+                raise AgentCancelled(extractor.text)
+            messages.append(msg)
+        else:
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto"
+                )
+            except Exception as e:
+                raise AgentAPIError(f"API Error: {e}") from e
+            _add_usage(usage_out, getattr(response, "usage", None))
+            msg = response.choices[0].message
+            messages.append(msg)
+            calls = [(tc.id, tc.function.name, tc.function.arguments)
+                     for tc in (msg.tool_calls or [])]
 
-        msg = response.choices[0].message
-        messages.append(msg)
-
-        if not msg.tool_calls:
+        if not calls:
             # Model responded with text instead of finishing. Just prompt it to finish.
             messages.append({"role": "user", "content": "Please continue and use the finish tool when done."})
             continue
 
-        for tool_call in msg.tool_calls:
-            func_name = tool_call.function.name
-
+        for pos, (call_id, func_name, raw_args) in enumerate(calls):
             try:
-                args = json.loads(tool_call.function.arguments)
+                args = json.loads(raw_args)
             except Exception as e:
                 error_msg = f"Error parsing JSON arguments: {e}"
-                print(f">> Tool Call: {func_name} - {error_msg} (raw: {tool_call.function.arguments!r})",
+                print(f">> Tool Call: {func_name} - {error_msg} (raw: {raw_args!r})",
                       file=sys.stderr)
-                messages.append({"role": "tool", "tool_call_id": tool_call.id, "name": func_name,
+                messages.append({"role": "tool", "tool_call_id": call_id, "name": func_name,
                                  "content": error_msg})
                 continue
 
@@ -292,11 +479,17 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 # assistant message) before returning, so the transcript stays
                 # valid if the caller reuses `messages` for a follow-up turn -
                 # OpenAI-compatible APIs reject histories with unanswered tool calls.
-                idx = msg.tool_calls.index(tool_call)
-                for tc in msg.tool_calls[idx:]:
-                    messages.append({"role": "tool", "tool_call_id": tc.id,
-                                     "name": tc.function.name, "content": "Finished."})
+                for cid, cname, _ in calls[pos:]:
+                    messages.append({"role": "tool", "tool_call_id": cid,
+                                     "name": cname, "content": "Finished."})
                 return args
+
+            if cancel_event is not None and cancel_event.is_set():
+                # Answer this and every remaining call so the history stays valid.
+                for cid, cname, _ in calls[pos:]:
+                    messages.append({"role": "tool", "tool_call_id": cid,
+                                     "name": cname, "content": "Request cancelled by user."})
+                raise AgentCancelled(extractor.text)
 
             handler = handlers.get(func_name)
             if handler is None:
@@ -316,7 +509,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
 
             messages.append({
                 "role": "tool",
-                "tool_call_id": tool_call.id,
+                "tool_call_id": call_id,
                 "name": func_name,
                 "content": str(result)
             })
@@ -334,6 +527,11 @@ def main():
 
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read()
+    try:
+        prompt = render_prompt(prompt)
+    except ConfigError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     system_content = "You are an autonomous file-management agent for an Obsidian vault."
     # Inject the vault's conventions manifest (generated by profile_vault.py) so every

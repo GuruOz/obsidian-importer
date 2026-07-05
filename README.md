@@ -206,6 +206,11 @@ docker compose exec pipeline scripts/run-weekly.sh
 - **Manual run:** `docker compose exec pipeline scripts/run-digest.sh` (or
   `docker compose run --rm pipeline scripts/run-digest.sh` if the pipeline container
   isn't already up).
+- **Filing under a specific date:** the prompts are date-agnostic - the run injects
+  today's date automatically, and you can force the work date from one place when
+  backfilling: `docker compose exec pipeline scripts/run-digest.sh 2026-07-03`
+  (or set `WORK_DATE=2026-07-03`). With an override the agent files under exactly
+  that date instead of inferring one from the digest.
 - **Audit trail:** every run that changes the vault appends a wikilinked line to
   `Raw Digests/Filing Log.md` (status, work date, entry count, every note touched),
   and the ntfy notification carries the same summary — so the phone alert tells you
