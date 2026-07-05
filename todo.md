@@ -50,6 +50,10 @@ This document serves as a historical record of architectural decisions and fixes
 *   **The Issue:** `search_relevant` (BM25 over vault chunks) ranked purely by lexical relevance, so a years-old note could outrank a current one describing the same topic - exactly the staleness problem web search engines solve with freshness boosting.
 *   **The Fix (Recency Weighting):** `lexical_index.py` now multiplies each chunk's BM25 score by a freshness factor derived from the note file's mtime: exponential decay halving every `VAULT_QA_RECENCY_HALFLIFE_DAYS` (default 90), floored at `VAULT_QA_RECENCY_FLOOR` (default 0.5) of the raw score so a strongly-more-relevant old note still wins - recency breaks ties, relevance stays primary. Each search hit now shows its age in days, and the tool description tells the agent about the weighting. Set `VAULT_QA_RECENCY_FLOOR=1` to disable.
 
+## Problem 12: Thin Sampling for Filing_Rules.md on Larger Vaults
+*   **The Issue:** `profile_vault.py --max-samples` defaulted to 60, inherited from early testing on a small vault. For a vault in the 800-2000 note range, 60 samples is well under 10% coverage, so the synthesized `Filing_Rules.md` (folder taxonomy, tag vocabulary, linking style) risks missing conventions used in folders that didn't get sampled.
+*   **The Fix:** Raised the default to 200, chosen to roughly triple coverage while staying well inside typical LLM context budgets (200 files x the default 800-char `--max-chars-per-file` cap is ~160k characters, ~40k tokens - comfortable for the models this pipeline targets). Still a CLI flag (`--max-samples`), so it can be tuned up further for very large vaults or down if a smaller/context-limited model is swapped in via `LLM_MODEL`.
+
 ## Planned Backlog: Chat UI Overhaul (vault-qa)
 
 A queued feature program for the `vault-qa` chat UI (`scripts/vault_web.py` +
