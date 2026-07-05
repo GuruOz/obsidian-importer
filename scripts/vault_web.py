@@ -18,6 +18,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 import custom_agent_loop as cal
 import lexical_index
+import session_store as store
 import vault_qa
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
@@ -28,6 +29,9 @@ KEEPALIVE_SECONDS = 15
 
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 
+# Live-session cache only: the durable copy of every chat lives in
+# session_store (SQLite). Evicting from here or restarting the container
+# loses nothing - the session is revived from the store on next use.
 SESSIONS = {}
 SESSIONS_LOCK = threading.Lock()
 
@@ -46,6 +50,12 @@ def _new_session():
     system_content = vault_qa.build_system_prompt(index, lexical_index=lex)
     return {
         "messages": [{"role": "system", "content": system_content}],
+        # Display-layer history for the sidebar/re-hydration endpoints: a list of
+        # {"type": "user", "text": ...} and {"type": "answer", ...answer payload}
+        # entries. Unlike "messages" it is never capped and holds no tool chatter.
+        "transcript": [],
+        "title": None,
+        "created": time.time(),
         "lexical_index": lex,
         "note_count": len(index),
         "chunk_count": len(lex.chunks),
@@ -54,16 +64,49 @@ def _new_session():
     }
 
 
+def _revive_session(row):
+    """Rebuild a live session from a stored one. The model-facing history is
+    replayed from the display transcript (user turns + answer text), so
+    tool-call chatter from before the restart is dropped - the fresh system
+    prompt and vault index are rebuilt anyway."""
+    session = _new_session()
+    session["transcript"] = list(row["transcript"])
+    session["title"] = row["title"]
+    session["created"] = row["created"]
+    session["last_used"] = row["last_used"]
+    for e in row["transcript"]:
+        if e.get("type") == "user":
+            session["messages"].append({"role": "user", "content": e.get("text") or ""})
+        elif e.get("type") == "answer":
+            session["messages"].append({"role": "assistant", "content": e.get("answer") or ""})
+    _cap_history(session["messages"], MAX_TURNS)
+    return session
+
+
 def get_or_create_session(session_id):
     with SESSIONS_LOCK:
         if session_id and session_id in SESSIONS:
             return session_id, SESSIONS[session_id]
+    # Building the vault/lexical indexes is slow; do it outside SESSIONS_LOCK.
+    row = store.load(session_id) if session_id else None
+    fresh = _revive_session(row) if row else _new_session()
+    with SESSIONS_LOCK:
+        if session_id and session_id in SESSIONS:  # lost a revive race; use the winner
+            return session_id, SESSIONS[session_id]
         new_id = session_id or str(uuid.uuid4())
         if len(SESSIONS) >= MAX_SESSIONS:
+            # Cache eviction only - the chat stays in the store and is revived
+            # on next use. A worker mid-request keeps its own reference and
+            # still persists its answer.
             oldest = min(SESSIONS, key=lambda k: SESSIONS[k]["last_used"])
             del SESSIONS[oldest]
-        SESSIONS[new_id] = _new_session()
-        return new_id, SESSIONS[new_id]
+        SESSIONS[new_id] = fresh
+        return new_id, fresh
+
+
+def _persist(session_id, session):
+    store.save(session_id, session["title"], session["created"],
+               session["last_used"], session["transcript"])
 
 
 def _role(m):
@@ -92,6 +135,104 @@ def meta():
         "vault_name": os.path.basename(cal.VAULT_DIR),
         "notes": len(vault_qa.build_vault_index()),
     })
+
+
+@app.route("/api/sessions")
+def list_sessions():
+    query = (request.args.get("q") or "").strip()
+    return jsonify({"sessions": store.list_all(query or None)})
+
+
+@app.route("/api/sessions/<sid>")
+def get_session(sid):
+    row = store.load(sid)
+    if row is None:
+        return jsonify({"error": "unknown session"}), 404
+    out = {"id": sid, "title": row["title"] or "New chat", "created": row["created"],
+           "last_used": row["last_used"], "turns": row["turns"],
+           "transcript": row["transcript"]}
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(sid)
+        if s is not None:
+            # Per-session index counts only exist while the session is live;
+            # the client falls back to the vault-wide /api/meta count otherwise.
+            out["notes"] = s["note_count"]
+            out["chunks"] = s["chunk_count"]
+    return jsonify(out)
+
+
+@app.route("/api/sessions/<sid>", methods=["PATCH"])
+def update_session(sid):
+    body = request.get_json(force=True, silent=True) or {}
+    out = {"id": sid}
+    if "title" in body:
+        title = (body.get("title") or "").strip()[:120]
+        if not title:
+            return jsonify({"error": "empty title"}), 400
+        if not store.rename(sid, title):
+            return jsonify({"error": "unknown session"}), 404
+        with SESSIONS_LOCK:
+            if sid in SESSIONS:
+                SESSIONS[sid]["title"] = title
+        out["title"] = title
+    if "pinned" in body:
+        pinned = bool(body.get("pinned"))
+        if not store.set_pinned(sid, pinned):
+            return jsonify({"error": "unknown session"}), 404
+        out["pinned"] = pinned
+    if len(out) == 1:
+        return jsonify({"error": "nothing to update"}), 400
+    return jsonify(out)
+
+
+@app.route("/api/sessions/<sid>/feedback", methods=["POST"])
+def feedback(sid):
+    """Thumbs up/down on the Nth answer of a session (rating null clears it).
+    Stored on the transcript's answer entry, so it persists, hydrates with the
+    chat, and dies with a regenerated answer."""
+    body = request.get_json(force=True, silent=True) or {}
+    idx = body.get("answer_index")
+    rating = body.get("rating")
+    if not isinstance(idx, int) or isinstance(idx, bool) or rating not in ("up", "down", None):
+        return jsonify({"error": "invalid feedback"}), 400
+
+    with SESSIONS_LOCK:
+        session = SESSIONS.get(sid)
+    if session is not None:
+        transcript, row = session["transcript"], None
+    else:
+        row = store.load(sid)
+        if row is None:
+            return jsonify({"error": "unknown session"}), 404
+        transcript = row["transcript"]
+
+    answers = [e for e in transcript if e.get("type") == "answer"]
+    if not 0 <= idx < len(answers):
+        return jsonify({"error": "no such answer"}), 400
+    if rating is None:
+        answers[idx].pop("feedback", None)
+    else:
+        answers[idx]["feedback"] = rating
+    if session is not None:
+        _persist(sid, session)
+    else:
+        store.save(sid, row["title"], row["created"], row["last_used"], transcript)
+    print(f"feedback: session={sid} answer={idx} rating={rating}", file=sys.stderr)
+    return jsonify({"ok": True, "answer_index": idx, "rating": rating})
+
+
+@app.route("/api/sessions/<sid>", methods=["DELETE"])
+def delete_session(sid):
+    with SESSIONS_LOCK:
+        s = SESSIONS.get(sid)
+        if s is not None:
+            if not s["lock"].acquire(blocking=False):
+                return jsonify({"error": "a request is in flight for this session"}), 409
+            del SESSIONS[sid]
+            s["lock"].release()
+    if not store.delete(sid) and s is None:
+        return jsonify({"error": "unknown session"}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/chat", methods=["POST"])
@@ -128,6 +269,9 @@ def chat():
                 payload = dict(finish_args)
                 payload["usage"] = usage
                 payload["elapsed"] = round(time.time() - t0, 1)
+                session["transcript"].append({"type": "answer", **payload})
+                session["last_used"] = time.time()
+                _persist(session_id, session)
                 q.put(("answer", payload))
         except cal.AgentAPIError as e:
             q.put(("error", {"message": str(e)}))
@@ -149,9 +293,19 @@ def chat():
                 session["lock"].release()
                 return jsonify({"error": "nothing to regenerate in this session"}), 400
             del session["messages"][user_idxs[-1] + 1:]
+            t_idxs = [i for i, e in enumerate(session["transcript"]) if e["type"] == "user"]
+            if t_idxs:
+                del session["transcript"][t_idxs[-1] + 1:]
+            session["last_used"] = time.time()
+            _persist(session_id, session)
         else:
             session["messages"].append({"role": "user", "content": user_message})
             _cap_history(session["messages"], MAX_TURNS)
+            session["transcript"].append({"type": "user", "text": user_message})
+            if session["title"] is None:
+                session["title"] = " ".join(user_message.split())[:80]
+            session["last_used"] = time.time()
+            _persist(session_id, session)
         threading.Thread(target=worker, daemon=True).start()
     except Exception:
         session["lock"].release()
@@ -184,6 +338,7 @@ def _init_client():
 
 
 _init_client()
+store.init()
 
 
 if __name__ == "__main__":
