@@ -17,9 +17,34 @@
   header { padding: 0.6rem 1rem; border-bottom: 1px solid #333; font-weight: 600;
            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   #title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #new-chat, #sb-toggle { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
-  #new-chat:hover, #sb-toggle:hover { background: #454545; }
+  #new-chat, #sb-toggle, #export-btn { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
+  #new-chat:hover, #sb-toggle:hover, #export-btn:hover { background: #454545; }
   #sb-toggle { padding: 0.35rem 0.6rem; }
+
+  /* --- export menu --- */
+  #export-wrap { position: relative; }
+  #export-menu {
+    position: absolute; right: 0; top: calc(100% + 0.3rem); z-index: 20;
+    display: flex; flex-direction: column; min-width: 10rem;
+    background: #2a2a2a; border: 1px solid #4a4a4a; border-radius: 8px;
+    overflow: hidden; box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+  }
+  #export-menu button {
+    background: none; border: none; border-radius: 0; color: inherit;
+    font-size: 0.85rem; text-align: left; padding: 0.5rem 0.8rem;
+  }
+  #export-menu button:hover { background: #3a3a3a; }
+  /* our display:flex would otherwise beat the UA's [hidden]{display:none} */
+  #export-menu[hidden] { display: none; }
+
+  /* --- per-answer feedback --- */
+  .fb-btn {
+    background: none; border: none; padding: 0 0.15rem; font-size: 0.85rem;
+    cursor: pointer; filter: grayscale(1); opacity: 0.55;
+  }
+  .fb-btn:hover { opacity: 0.9; }
+  .fb-btn.on { filter: none; opacity: 1; }
+  .fb-row { margin-top: 0.4rem; display: flex; gap: 0.25rem; }
 
   /* --- conversation history sidebar --- */
   #sidebar {
@@ -162,8 +187,10 @@
     .code-copy { background: #e0e0e0; color: #333; border-color: #ccc; }
     .tok-kw { color: #7c4dbd; } .tok-str { color: #2e7d32; }
     .tok-com { color: #999; } .tok-num { color: #b26a00; }
-    #new-chat { background: #e4e4e4; color: #1a1a1a; }
-    #new-chat:hover { background: #d8d8d8; }
+    #new-chat, #export-btn { background: #e4e4e4; color: #1a1a1a; }
+    #new-chat:hover, #export-btn:hover { background: #d8d8d8; }
+    #export-menu { background: #fff; border-color: #ccc; box-shadow: 0 4px 14px rgba(0,0,0,0.12); }
+    #export-menu button:hover { background: #eee; }
     #scroll-down { background: #e4e4e4; color: #1a1a1a; border-color: #ccc; }
     .msg-copy, .regen-btn, .retry-btn { background: #e0e0e0; color: #333; border-color: #ccc; }
     .regen-btn:hover, .retry-btn:hover, #scroll-down:hover { background: #d8d8d8; }
@@ -181,6 +208,13 @@
 <header>
   <button id="sb-toggle" type="button" title="Toggle history sidebar">&#9776;</button>
   <span id="title">Vault Chat</span>
+  <div id="export-wrap">
+    <button id="export-btn" type="button" title="Download this conversation">Export</button>
+    <div id="export-menu" hidden>
+      <button type="button" data-fmt="md">Markdown (.md)</button>
+      <button type="button" data-fmt="json">JSON (.json)</button>
+    </div>
+  </div>
   <button id="new-chat" type="button" title="Start a fresh conversation (Ctrl/Cmd+K)">New chat</button>
 </header>
 <div id="log"></div>
@@ -686,6 +720,80 @@ log.addEventListener("click", (e) => {
   if (retryBtn && !sendBtn.disabled && lastPayload) {
     retryBtn.closest(".msg.error").remove();
     ask(lastPayload);
+    return;
+  }
+  const fbBtn = e.target.closest(".fb-btn");
+  if (fbBtn && sessionId) {
+    const msg = fbBtn.closest(".msg.assistant");
+    // The Nth assistant bubble in the log is the Nth answer in the transcript
+    // (regenerate replaces the last one in both places).
+    const idx = [...log.querySelectorAll(".msg.assistant")].indexOf(msg);
+    const rating = fbBtn.classList.contains("on") ? null : fbBtn.dataset.rating;
+    for (const b of msg.querySelectorAll(".fb-btn")) {
+      b.classList.toggle("on", b.dataset.rating === rating);
+    }
+    fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answer_index: idx, rating }),
+    }).catch(() => {});
+  }
+});
+
+// --- chat export (Markdown / JSON) ---
+const exportBtn = document.getElementById("export-btn");
+const exportMenu = document.getElementById("export-menu");
+exportBtn.addEventListener("click", () => {
+  exportMenu.hidden = !exportMenu.hidden;
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#export-wrap")) exportMenu.hidden = true;
+});
+
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function transcriptToMarkdown(d) {
+  const lines = ["# " + (d.title || "Vault chat"), "",
+                 `_Exported ${new Date().toISOString().slice(0, 10)} from vault "${vaultName}"_`, ""];
+  for (const e of d.transcript || []) {
+    if (e.type === "user") {
+      lines.push("## You", "", e.text || "", "");
+    } else if (e.type === "answer") {
+      lines.push("## Assistant", "", e.answer || "");
+      if (e.sources && e.sources.length) lines.push("", "**Sources:** " + e.sources.join(", "));
+      lines.push("");
+    }
+  }
+  return lines.join("\n");
+}
+
+exportMenu.addEventListener("click", async (e) => {
+  const fmt = e.target.closest("button[data-fmt]");
+  if (!fmt) return;
+  exportMenu.hidden = true;
+  if (!sessionId) return;
+  let d;
+  try {
+    const resp = await fetch("/api/sessions/" + encodeURIComponent(sessionId));
+    if (!resp.ok) return;
+    d = await resp.json();
+  } catch (err) { return; }
+  const base = (d.title || "vault-chat").replace(/[^\w\- ]+/g, "").trim().slice(0, 60) || "vault-chat";
+  if (fmt.dataset.fmt === "json") {
+    const payload = { title: d.title, session_id: d.id, created: d.created,
+                      exported: new Date().toISOString(), vault: vaultName,
+                      transcript: d.transcript };
+    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }),
+                 base + ".json");
+  } else {
+    downloadBlob(new Blob([transcriptToMarkdown(d)], { type: "text/markdown" }),
+                 base + ".md");
   }
 });
 
@@ -776,6 +884,19 @@ function addAnswer(payload) {
     meta.textContent = metaBits.join(" · ");
     div.appendChild(meta);
   }
+
+  const fbRow = document.createElement("div");
+  fbRow.className = "fb-row";
+  for (const rating of ["up", "down"]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fb-btn" + (payload.feedback === rating ? " on" : "");
+    btn.dataset.rating = rating;
+    btn.title = rating === "up" ? "Good response" : "Bad response";
+    btn.textContent = rating === "up" ? "\u{1f44d}" : "\u{1f44e}";
+    fbRow.appendChild(btn);
+  }
+  div.appendChild(fbRow);
 
   const regenRow = document.createElement("div");
   regenRow.className = "regen-row";

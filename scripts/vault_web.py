@@ -185,6 +185,42 @@ def update_session(sid):
     return jsonify(out)
 
 
+@app.route("/api/sessions/<sid>/feedback", methods=["POST"])
+def feedback(sid):
+    """Thumbs up/down on the Nth answer of a session (rating null clears it).
+    Stored on the transcript's answer entry, so it persists, hydrates with the
+    chat, and dies with a regenerated answer."""
+    body = request.get_json(force=True, silent=True) or {}
+    idx = body.get("answer_index")
+    rating = body.get("rating")
+    if not isinstance(idx, int) or isinstance(idx, bool) or rating not in ("up", "down", None):
+        return jsonify({"error": "invalid feedback"}), 400
+
+    with SESSIONS_LOCK:
+        session = SESSIONS.get(sid)
+    if session is not None:
+        transcript, row = session["transcript"], None
+    else:
+        row = store.load(sid)
+        if row is None:
+            return jsonify({"error": "unknown session"}), 404
+        transcript = row["transcript"]
+
+    answers = [e for e in transcript if e.get("type") == "answer"]
+    if not 0 <= idx < len(answers):
+        return jsonify({"error": "no such answer"}), 400
+    if rating is None:
+        answers[idx].pop("feedback", None)
+    else:
+        answers[idx]["feedback"] = rating
+    if session is not None:
+        _persist(sid, session)
+    else:
+        store.save(sid, row["title"], row["created"], row["last_used"], transcript)
+    print(f"feedback: session={sid} answer={idx} rating={rating}", file=sys.stderr)
+    return jsonify({"ok": True, "answer_index": idx, "rating": rating})
+
+
 @app.route("/api/sessions/<sid>", methods=["DELETE"])
 def delete_session(sid):
     with SESSIONS_LOCK:

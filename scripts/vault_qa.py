@@ -35,7 +35,9 @@ SEARCH_RELEVANT_TOOL = {
         "description": (
             "BM25 lexical search over chunked vault text - use for thematic/paraphrased "
             "questions where you don't know the exact wording. Use grep_search instead "
-            "for exact identifiers (ticket numbers, exact names/dates)."
+            "for exact identifiers (ticket numbers, exact names/dates). Results are "
+            "recency-weighted: at similar relevance, recently modified notes rank first "
+            "(each hit shows its age in days)."
         ),
         "parameters": {
             "type": "object",
