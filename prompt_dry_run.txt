@@ -1,6 +1,8 @@
 You are proposing how tonight's M365 Copilot work-summary digest should be filed into
 this Obsidian vault. This is a DRY RUN: you must not modify any file under the vault.
 
+{{DATE_CONTEXT}}
+
 1. Read the staged digest at /work/staging/digest.md.
 2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
    the file exists - it documents the concrete folder taxonomy, daily-note format, tag
@@ -10,17 +12,19 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    candidate notes by title and folder from the index, then Read only those specific
    candidates to confirm. Do NOT run broad vault-wide Grep searches - the index already
    gives you complete title coverage.
-4. Determine the digest's WORK DATE from the digest content itself (each section is
-   headed "Digest received <timestamp>" and the body usually states its own date, e.g.
-   "Work Log - 03 Jul 2026"). Propose filing under that date's daily note and use that
-   date in the idempotency marker - not the current run date if it differs.
+4. Determine the WORK DATE. If the DATE CONTEXT above specifies one, use it exactly.
+   Otherwise infer it from the digest content itself (each section is headed
+   "Digest received <timestamp>" and the body usually states its own date, in a
+   "Work Log - <DD Mon YYYY>" style line). Propose filing under that date's daily
+   note and use that date in the idempotency marker - not today's date if the work
+   date differs from it.
 5. Check whether <!-- copilot-digest:<work-date> --> already exists in that daily note,
    and note in your proposal whether this run would be a no-op duplicate.
 6. Split the digest into atomic entries and, for each, decide exactly where it would be
    filed: daily-note section, and which topic/project note (existing or new) it would
    update or create. Actively discover related existing notes via the index and embed `[[Note Title]]` links to inter-connect related concepts, issues, and tickets.
    - **DATA PRESERVATION RULE (LOSSLESS)**: Do not summarize, compress, or omit operational details. Preserve all specific identifiers (ticket numbers like CS... or TrackingID...), names of individuals, exact quotes, and specific action items/options from the source digest. Only omit true noise (email signatures, contact details, confidentiality disclaimers). Do not alter acronyms or department names (e.g. preserve "ITD / IFNRA" exactly as written).
-   - **CHRONOLOGICAL RULE**: When applying dates to templates, ensure the weekday matches the Work Date correctly (e.g. 03 Jul 2026 is a Friday, do not write Thursday).
+   - **CHRONOLOGICAL RULE**: When writing any date with a weekday, compute the weekday from the work date itself, anchored to the DATE CONTEXT above (you know today's date and weekday from it - count backward/forward). Never guess a weekday; a wrong weekday next to a correct date is worse than no weekday.
    - **NOTE GRANULARITY RULE**: When creating new notes, use highly specific titles that describe the exact issue, task, or incident (e.g. 'RNS policy tips persist after licence removal', NOT generic titles like 'Purview policy tips limitation'). When deciding whether to UPDATE an existing note, you MUST NOT update notes with generic titles (like 'Purview policy tips limitation') just because they share a topic. If the digest introduces a specific scenario, test, or ticket, you MUST CREATE a new specific note rather than appending it to a generic umbrella note. Only update an existing note if it is a direct continuation of that *exact same specific issue or ticket*.
 7. Do NOT use Write or Edit on any file inside the vault. Write your proposal to
    /work/staging/proposed.md - the only file you may write.
