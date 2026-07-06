@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import subprocess
+import tempfile
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
@@ -452,6 +453,64 @@ def chat_stop():
         return jsonify({"error": "no request in flight"}), 409
     cancel.set()
     return jsonify({"ok": True})
+
+
+@app.route("/api/simulator/email", methods=["POST"])
+def simulator_email():
+    body = request.get_json(force=True, silent=True) or {}
+    sim_type = body.get("type", "personal")
+    content = body.get("content", "")
+    
+    if sim_type == "digest":
+        prompt_file = "/app/prompt_dry_run.txt"
+        target_file = "digest.md"
+    else:
+        prompt_file = "/app/prompt_personal_email_dry_run.txt"
+        target_file = "personal.md"
+        
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Write the content
+        with open(os.path.join(tmpdir, target_file), "w", encoding="utf-8") as f:
+            f.write(content)
+            
+        # 2. Write vault_index.txt
+        vault_index = os.path.join(tmpdir, "vault_index.txt")
+        try:
+            index_lines = []
+            for root, _, files in os.walk(cal.VAULT_DIR):
+                if "/." in root or "/Attachments" in root or "/smart-chats" in root:
+                    continue
+                for fname in files:
+                    if fname.endswith(".md") and not fname.startswith("."):
+                        rel = os.path.relpath(os.path.join(root, fname), cal.VAULT_DIR)
+                        index_lines.append(rel)
+            with open(vault_index, "w", encoding="utf-8") as f:
+                f.write("\n".join(sorted(index_lines)))
+        except Exception as e:
+            print(f"Simulator warning: failed to generate vault_index.txt: {e}", file=sys.stderr)
+            
+        # 3. Setup ENV
+        env = os.environ.copy()
+        env["STAGING_DIR"] = tmpdir
+        env["DRY_RUN"] = "1"
+        
+        # 4. Run agent
+        cmd = [sys.executable, "/app/scripts/custom_agent_loop.py", prompt_file]
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        
+        # 5. Read proposed.md
+        proposed_path = os.path.join(tmpdir, "proposed.md")
+        proposed_content = ""
+        if os.path.exists(proposed_path):
+            with open(proposed_path, "r", encoding="utf-8") as f:
+                proposed_content = f.read()
+                
+        return jsonify({
+            "stdout": proc.stdout,
+            "stderr": proc.stderr,
+            "proposed": proposed_content,
+            "exit_code": proc.returncode
+        })
 
 
 def _init_client():
