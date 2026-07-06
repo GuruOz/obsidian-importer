@@ -309,7 +309,20 @@
     </div>
   </div>
 </div>
-<div id="view-obsidian" class="view" style="display:none; flex:1; min-height:0;">
+<div id="view-obsidian" class="view" style="display:none; flex:1; min-height:0; position: relative;">
+  <div id="obsidian-insecure-warning" style="display:none; flex-direction:column; align-items:center; justify-content:center; height:100%; text-align:center; padding: 2rem; background: #1e1e1e;">
+    <div style="font-size: 3rem; margin-bottom: 1rem;">🔒</div>
+    <h2 style="margin: 0 0 1rem 0;">Secure Connection Required</h2>
+    <p style="max-width: 500px; color: #bbb; line-height: 1.5; margin-bottom: 1.5rem;">
+      Modern browsers block KasmVNC from running in an insecure context. Because you are accessing this web app via HTTP, the Obsidian viewer cannot be embedded here.
+    </p>
+    <div style="display: flex; gap: 1rem;">
+      <a id="obsidian-direct-link" href="#" target="_blank" style="padding: 0.6rem 1.2rem; background: #2b5797; color: white; text-decoration: none; border-radius: 8px; font-weight: 500;">Open Obsidian in New Tab (HTTPS)</a>
+    </div>
+    <p style="max-width: 500px; color: #888; font-size: 0.85rem; margin-top: 1rem;">
+      Note: You will need to accept the self-signed security certificate warning in the new tab.
+    </p>
+  </div>
   <iframe id="obsidian-iframe" style="width:100%; height:100%; border:none;"></iframe>
 </div>
 </div>
@@ -1276,8 +1289,22 @@ document.querySelectorAll('.tab').forEach(t => {
     } else if (viewId === 'view-obsidian') {
       view.style.display = 'flex';
       const iframe = document.getElementById('obsidian-iframe');
-      if (!iframe.src) {
-        iframe.src = window.location.protocol + '//' + window.location.hostname + ':3000';
+      const warning = document.getElementById('obsidian-insecure-warning');
+      const link = document.getElementById('obsidian-direct-link');
+      
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      const isSecure = window.isSecureContext;
+      
+      if (!isSecure && !isLocalhost) {
+        iframe.style.display = 'none';
+        warning.style.display = 'flex';
+        link.href = 'https://' + window.location.hostname + ':3001';
+      } else {
+        iframe.style.display = 'block';
+        warning.style.display = 'none';
+        if (!iframe.src) {
+          iframe.src = window.location.protocol + '//' + window.location.hostname + (window.location.protocol === 'https:' ? ':3001' : ':3000');
+        }
       }
     }
     
