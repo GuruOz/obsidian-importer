@@ -46,6 +46,26 @@
   .fb-btn.on { filter: none; opacity: 1; }
   .fb-row { margin-top: 0.4rem; display: flex; gap: 0.25rem; }
 
+  /* --- settings form --- */
+  /* --- settings form --- */
+  .settings-section { margin-bottom: 1.5rem; background: #222; border-radius: 12px; padding: 1.25rem; border: 1px solid #333; }
+  .settings-section-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #fff; padding-bottom: 0.5rem; border-bottom: 1px solid #333; }
+  .form-group { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 1.25rem; }
+  .form-group:last-child { margin-bottom: 0; }
+  .form-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .form-label { font-weight: 500; font-size: 0.95rem; color: #eee; }
+  .form-input, .form-select { padding: 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-family: inherit; font-size: 0.9rem; transition: border-color 0.2s; width: 100%; }
+  .form-input:focus, .form-select:focus { outline: none; border-color: #2b5797; }
+  .form-comment { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
+  
+  /* toggle switch */
+  .switch { position: relative; display: inline-block; width: 44px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #555; transition: .3s; border-radius: 24px; }
+  .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+  input:checked + .slider { background-color: #34c759; }
+  input:checked + .slider:before { transform: translateX(20px); }
+
   /* --- conversation history sidebar --- */
   #sidebar {
     width: 260px; flex-shrink: 0; display: flex; flex-direction: column;
@@ -71,6 +91,12 @@
   }
   .sess:hover { background: #2a2a2a; }
   .sess.active { background: #333; color: #fff; }
+  .tab { cursor: pointer; padding: 0.2rem 0.5rem; color: #888; transition: color 0.2s; font-weight: 600; }
+  .tab:hover { color: #ccc; }
+  .tab.active { color: #fff; border-bottom: 2px solid #2b5797; }
+  .settings-item { padding: 0.5rem 1rem; cursor: pointer; color: #ccc; font-size: 0.85rem; }
+  .settings-item:hover { background: #2a2a2a; }
+  .settings-item.active { background: #333; color: #fff; }
   .sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-act { display: none; gap: 0.1rem; flex-shrink: 0; }
   .sess:hover .sess-act { display: flex; }
@@ -185,8 +211,24 @@
     .sess.active { background: #dcdcdc; color: #000; }
     .sess-act button { color: #777; }
     .sess-act button:hover { color: #000; }
+    .sess-act button:hover { color: #000; }
     .sess-edit { background: #fff; border-color: #bbb; }
     #sb-toggle { background: #e4e4e4; color: #1a1a1a; }
+    #sb-toggle:hover { background: #d8d8d8; }
+    .tab { color: #777; }
+    .tab:hover { color: #333; }
+    .tab.active { color: #000; border-bottom-color: #2b5797; }
+    .settings-item { color: #333; }
+    .settings-item:hover { background: #e2e2e2; }
+    .settings-item.active { background: #dcdcdc; color: #000; }
+    #settings-sidebar { background: #f0f0f0; border-color: #ddd; }
+    #settings-textarea { background: #fff; color: #1a1a1a; border-color: #ccc; }
+    .settings-section { background: #fff; border-color: #e2e2e2; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .settings-section-title { color: #111; border-color: #eee; }
+    .form-label { color: #111; }
+    .form-input, .form-select { background: #fafafa; color: #111; border-color: #ccc; }
+    .form-comment { color: #666; }
+    .slider { background-color: #ccc; }
     #sb-toggle:hover { background: #d8d8d8; }
     .msg.assistant { background: #eee; }
     .msg.error { background: #fbdede; }
@@ -229,7 +271,11 @@
 <div id="main">
 <header>
   <button id="sb-toggle" type="button" title="Toggle history sidebar">&#9776;</button>
-  <span id="title">Vault Chat</span>
+  <div id="tabs" style="flex: 1; display: flex; gap: 1rem; align-items: center; margin-left: 1rem;">
+    <span class="tab active" data-view="view-chat">Chat</span>
+    <span class="tab" data-view="view-settings">Settings</span>
+    <span class="tab" data-view="view-obsidian">Obsidian</span>
+  </div>
   <div id="export-wrap">
     <button id="export-btn" type="button" title="Download this conversation">Export</button>
     <div id="export-menu" hidden>
@@ -239,14 +285,33 @@
   </div>
   <button id="new-chat" type="button" title="Start a fresh conversation (Ctrl/Cmd+K)">New chat</button>
 </header>
-<div id="log"></div>
-<button id="scroll-down" type="button" title="Jump to newest">&#8595;</button>
-<div id="statusbar"><span id="ctx-badge"></span></div>
-<form id="form">
-  <textarea id="input" rows="1" autocomplete="off"
-            placeholder="Ask your vault anything...  (Enter to send, Shift+Enter for a new line)"></textarea>
-  <button id="send" type="submit">Send</button>
-</form>
+<div id="view-chat" class="view active" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+  <div id="log"></div>
+  <button id="scroll-down" type="button" title="Jump to newest">&#8595;</button>
+  <div id="statusbar"><span id="ctx-badge"></span></div>
+  <form id="form">
+    <textarea id="input" rows="1" autocomplete="off"
+              placeholder="Ask your vault anything...  (Enter to send, Shift+Enter for a new line)"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+</div>
+<div id="view-settings" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
+  <div id="settings-sidebar" style="width: 220px; border-right: 1px solid #333; overflow-y: auto;">
+    <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Files</div>
+    <div id="settings-list" style="display: flex; flex-direction: column;"></div>
+  </div>
+  <div id="settings-editor-container" style="flex:1; display:flex; flex-direction:column; padding: 1rem; overflow-y:auto;">
+    <textarea id="settings-textarea" spellcheck="false" style="flex:1; font-family: monospace; font-size: 0.9rem; background: #2a2a2a; color: #e8e8e8; border: 1px solid #444; padding: 0.75rem; resize: none; border-radius: 8px;"></textarea>
+    <div id="settings-form" style="display:none; flex:1; flex-direction:column; max-width: 800px;"></div>
+    <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
+      <span id="settings-status" style="font-size: 0.9rem; color: #aaa;"></span>
+      <button id="settings-save" style="background: #2b5797; color: white;">Save</button>
+    </div>
+  </div>
+</div>
+<div id="view-obsidian" class="view" style="display:none; flex:1; min-height:0;">
+  <iframe id="obsidian-iframe" style="width:100%; height:100%; border:none;"></iframe>
+</div>
 </div>
 </div>
 <script>
@@ -1193,6 +1258,254 @@ if (sessionId) {
     }
   })();
 }
+// --- Tabs & Views ---
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.querySelectorAll('.view').forEach(v => v.style.display = 'none');
+    
+    const viewId = t.dataset.view;
+    const view = document.getElementById(viewId);
+    if (viewId === 'view-chat') {
+      view.style.display = 'flex';
+      maybeScroll();
+    } else if (viewId === 'view-settings') {
+      view.style.display = 'flex';
+      loadSettingsList();
+    } else if (viewId === 'view-obsidian') {
+      view.style.display = 'flex';
+      const iframe = document.getElementById('obsidian-iframe');
+      if (!iframe.src) {
+        iframe.src = window.location.protocol + '//' + window.location.hostname + ':3000';
+      }
+    }
+    
+    const isChat = viewId === 'view-chat';
+    document.getElementById('new-chat').style.display = isChat ? 'block' : 'none';
+    document.getElementById('export-wrap').style.display = isChat ? 'block' : 'none';
+    document.getElementById('sb-toggle').style.display = isChat ? 'block' : 'none';
+    
+    if (!isChat) {
+      document.getElementById('sidebar').classList.add('collapsed');
+    } else {
+      if (localStorage.getItem("vault_qa_sidebar") !== "0") {
+        document.getElementById('sidebar').classList.remove('collapsed');
+      }
+    }
+  });
+});
+
+// --- Settings ---
+let currentSettingFile = null;
+async function loadSettingsList() {
+  try {
+    const res = await fetch('/api/settings');
+    const data = await res.json();
+    const list = document.getElementById('settings-list');
+    list.innerHTML = '';
+    data.files.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'settings-item';
+      el.textContent = f;
+      el.onclick = () => loadSetting(f, el);
+      list.appendChild(el);
+    });
+    if (data.files.length > 0 && !currentSettingFile) {
+      loadSetting(data.files[0], list.firstChild);
+    } else if (currentSettingFile) {
+      const activeEl = [...list.children].find(c => c.textContent === currentSettingFile);
+      if (activeEl) activeEl.classList.add('active');
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+const envSchema = {
+  "GRAPH_CLIENT_ID": { label: "Microsoft Graph Client ID", category: "Microsoft Graph Authentication", type: "text", desc: "The Application (client) ID from your Azure Entra app registration." },
+  "GRAPH_TENANT": { label: "Microsoft Graph Tenant", category: "Microsoft Graph Authentication", type: "select", options: ["consumers", "common", "organizations"], desc: "Typically 'consumers' for personal Microsoft accounts." },
+  "DIGEST_FROM": { label: "Copilot Digest Sender", category: "Email Parsing", type: "text", desc: "The email address that sends the digest." },
+  "DIGEST_SUBJECT_PATTERN": { label: "Digest Subject Pattern", category: "Email Parsing", type: "text", desc: "Regex pattern for the subject line." },
+  "DIGEST_FOLDER": { label: "Digest Folder", category: "Email Parsing", type: "text", desc: "Outlook folder where digests are stored (e.g. Inbox/CopilotDigest)." },
+  "PERSONAL_MAIL_DRY_RUN": { label: "Personal Mail Dry Run", category: "Personal Mail Triage", type: "toggle", desc: "Keep personal mail proposing-only." },
+  "PERSONAL_MAIL_FOLDER": { label: "Personal Mail Folder", category: "Personal Mail Triage", type: "text", desc: "Folder to read personal mail from (e.g. Inbox)." },
+  "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max Personal Emails Per Run", category: "Personal Mail Triage", type: "number" },
+  "LLM_BASE_URL": { label: "LLM Base URL", category: "AI Agent Configuration", type: "text", desc: "OpenAI-compatible API endpoint." },
+  "LLM_API_KEY": { label: "LLM API Key", category: "AI Agent Configuration", type: "password", desc: "Your API key for the LLM provider." },
+  "LLM_MODEL": { label: "LLM Model", category: "AI Agent Configuration", type: "text", desc: "The model to use (e.g., gpt-4o, deepseek-chat)." },
+  "VAULT_QA_MAX_TURNS": { label: "Max Chat Turns", category: "Vault QA Settings", type: "number" },
+  "VAULT_QA_MAX_SESSIONS": { label: "Max Chat Sessions", category: "Vault QA Settings", type: "number" },
+  "VAULT_QA_RECENCY_HALFLIFE_DAYS": { label: "Recency Half-life (Days)", category: "Vault QA Settings", type: "number" },
+  "VAULT_QA_RECENCY_FLOOR": { label: "Recency Floor", category: "Vault QA Settings", type: "text" },
+  "DRY_RUN": { label: "Global Dry Run Mode", category: "Safety", type: "toggle", desc: "If enabled, changes are written to staging instead of modifying the vault." },
+  "BACKUP_RETENTION_DAYS": { label: "Backup Retention (Days)", category: "Safety", type: "number" },
+  "OBSIDIAN_HEALTHCHECK_URL": { label: "Obsidian Healthcheck URL", category: "Integrations", type: "text" },
+  "NTFY_TOPIC": { label: "Ntfy Topic", category: "Integrations", type: "text", desc: "Topic name for mobile push notifications (ntfy.sh)." }
+};
+
+async function loadSetting(filename, el) {
+  document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
+  if (el) el.classList.add('active');
+  currentSettingFile = filename;
+  const status = document.getElementById('settings-status');
+  const txtArea = document.getElementById('settings-textarea');
+  const formDiv = document.getElementById('settings-form');
+  status.textContent = 'Loading...';
+  try {
+    const res = await fetch('/api/settings/' + filename);
+    const data = await res.json();
+    if (data.type === 'env') {
+      txtArea.style.display = 'none';
+      formDiv.style.display = 'flex';
+      formDiv.innerHTML = '';
+      
+      const sections = {};
+      const getSection = (name) => {
+        if (!sections[name]) {
+          const sec = document.createElement('div');
+          sec.className = 'settings-section';
+          const title = document.createElement('div');
+          title.className = 'settings-section-title';
+          title.textContent = name;
+          sec.appendChild(title);
+          sections[name] = sec;
+          formDiv.appendChild(sec);
+        }
+        return sections[name];
+      };
+
+      data.fields.forEach(f => {
+        if (f.type === 'kv') {
+           const schema = envSchema[f.key] || { label: f.key, category: "Advanced Settings", type: "text", desc: "" };
+           const sec = getSection(schema.category);
+           
+           const group = document.createElement('div');
+           group.className = 'form-group';
+           
+           const header = document.createElement('div');
+           header.className = 'form-header';
+           
+           const infoDiv = document.createElement('div');
+           const label = document.createElement('label');
+           label.className = 'form-label';
+           label.textContent = schema.label;
+           infoDiv.appendChild(label);
+           
+           if (schema.desc) {
+             const desc = document.createElement('div');
+             desc.className = 'form-comment';
+             desc.textContent = schema.desc;
+             infoDiv.appendChild(desc);
+           }
+           header.appendChild(infoDiv);
+           
+           let input;
+           if (schema.type === 'toggle') {
+             const switchDiv = document.createElement('label');
+             switchDiv.className = 'switch';
+             input = document.createElement('input');
+             input.type = 'checkbox';
+             input.className = 'env-input';
+             input.dataset.key = f.key;
+             input.checked = f.value === '1' || f.value.toLowerCase() === 'true';
+             const slider = document.createElement('span');
+             slider.className = 'slider';
+             switchDiv.appendChild(input);
+             switchDiv.appendChild(slider);
+             header.appendChild(switchDiv);
+           } else if (schema.type === 'select') {
+             input = document.createElement('select');
+             input.className = 'form-select env-input';
+             input.dataset.key = f.key;
+             input.style.width = '200px';
+             schema.options.forEach(opt => {
+               const o = document.createElement('option');
+               o.value = opt;
+               o.textContent = opt;
+               if (f.value === opt) o.selected = true;
+               input.appendChild(o);
+             });
+             header.appendChild(input);
+           } else {
+             input = document.createElement('input');
+             input.type = schema.type || 'text';
+             input.className = 'form-input env-input';
+             input.dataset.key = f.key;
+             input.value = f.value;
+             input.style.flex = '1';
+             input.style.maxWidth = '300px';
+             header.appendChild(input);
+           }
+           
+           group.appendChild(header);
+           sec.appendChild(group);
+        }
+      });
+      
+      // Move Advanced Settings to the end
+      if (sections["Advanced Settings"]) {
+        formDiv.appendChild(sections["Advanced Settings"]);
+      }
+    } else {
+      formDiv.style.display = 'none';
+      txtArea.style.display = 'block';
+      txtArea.value = data.content || '';
+    }
+    status.textContent = '';
+  } catch (e) {
+    status.textContent = 'Error loading file';
+  }
+}
+
+document.getElementById('settings-save').onclick = async () => {
+  if (!currentSettingFile) return;
+  const status = document.getElementById('settings-status');
+  status.textContent = 'Saving...';
+  try {
+    let payload = {};
+    if (currentSettingFile === '.env') {
+      const updates = {};
+      document.querySelectorAll('.env-input').forEach(inp => {
+        if (inp.type === 'checkbox') {
+          updates[inp.dataset.key] = inp.checked ? '1' : '0';
+        } else {
+          updates[inp.dataset.key] = inp.value;
+        }
+      });
+      payload = { updates };
+    } else {
+      payload = { content: document.getElementById('settings-textarea').value };
+    }
+    
+    const res = await fetch('/api/settings/' + currentSettingFile, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    if (res.ok) {
+      status.textContent = 'Saved!';
+      setTimeout(() => { if(status.textContent === 'Saved!') status.textContent = ''; }, 2000);
+      
+      if (currentSettingFile === '.env') {
+        if (confirm("A restart is required to apply changes to .env. Restart now?")) {
+           status.textContent = 'Restarting...';
+           const rres = await fetch('/api/system/restart', {method: 'POST'});
+           if (rres.ok) {
+             status.textContent = 'Restart initiated. You may need to refresh the page.';
+           } else {
+             status.textContent = 'Failed to restart.';
+           }
+        }
+      }
+    } else {
+      status.textContent = 'Error saving';
+    }
+  } catch (e) {
+    status.textContent = 'Error saving';
+  }
+};
 </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import uuid
+import subprocess
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
@@ -127,6 +128,98 @@ def _cap_history(messages, max_turns):
 @app.route("/")
 def index():
     return send_from_directory(WEB_DIR, "index.html")
+
+
+HOST_DIR = "/host" if os.path.exists("/host") else "."
+EDITABLE_FILES = [
+    ".env",
+    "crontab",
+    "prompt_template.txt",
+    "prompt_dry_run.txt",
+    "prompt_vault_profile.txt",
+    "prompt_weekly_rollup.txt",
+    "prompt_personal_email.txt",
+    "prompt_personal_email_dry_run.txt"
+]
+
+@app.route("/api/settings")
+def list_settings():
+    return jsonify({"files": EDITABLE_FILES})
+
+@app.route("/api/settings/<filename>", methods=["GET", "PUT"])
+def manage_setting(filename):
+    if filename not in EDITABLE_FILES:
+        return jsonify({"error": "invalid file"}), 400
+    filepath = os.path.join(HOST_DIR, filename)
+    
+    if request.method == "GET":
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+            if filename == ".env":
+                lines = []
+                for line in content.splitlines():
+                    if not line.strip().startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        lines.append({"type": "kv", "key": k.strip(), "value": v.strip(), "raw": line})
+                    else:
+                        lines.append({"type": "comment", "raw": line})
+                return jsonify({"filename": filename, "type": "env", "fields": lines})
+            else:
+                return jsonify({"filename": filename, "type": "text", "content": content})
+        except FileNotFoundError:
+            return jsonify({"error": "file not found"}), 404
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    if request.method == "PUT":
+        body = request.get_json(force=True, silent=True) or {}
+        if filename == ".env":
+            updates = body.get("updates", {})
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    old_lines = f.read().splitlines()
+                new_lines = []
+                for line in old_lines:
+                    if not line.strip().startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        if k in updates:
+                            new_lines.append(f"{k}={updates[k]}")
+                        else:
+                            new_lines.append(line)
+                    else:
+                        new_lines.append(line)
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write("\n".join(new_lines) + "\n")
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+        else:
+            content = body.get("content")
+            if content is None:
+                return jsonify({"error": "content required"}), 400
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(content)
+                return jsonify({"ok": True})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+@app.route("/api/system/restart", methods=["POST"])
+def system_restart():
+    try:
+        subprocess.Popen([
+            "curl", "-s", "--unix-socket", "/var/run/docker.sock",
+            "-X", "POST", "http://localhost/containers/copilot-digest-pipeline/restart"
+        ])
+        subprocess.Popen([
+            "curl", "-s", "--unix-socket", "/var/run/docker.sock",
+            "-X", "POST", "http://localhost/containers/copilot-digest-vault-qa/restart"
+        ])
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/meta")

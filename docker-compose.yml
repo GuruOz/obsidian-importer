@@ -49,6 +49,10 @@ services:
       # Durable chat history (SQLite). The vault mount is read-only, so the
       # session store lives here instead - survives container rebuilds.
       - ./data/vault-qa:/data
+      # Mount the project root so vault-qa can read/edit configuration files from the UI
+      - ./:/host
+      # Mount the docker socket so vault-qa can issue container restarts
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8420:8420"
     restart: unless-stopped
