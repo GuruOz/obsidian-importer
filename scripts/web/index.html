@@ -298,13 +298,59 @@
 </div>
 <div id="view-settings" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
   <div id="settings-sidebar" style="width: 220px; border-right: 1px solid #333; overflow-y: auto;">
+    <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Actions</div>
+    <div id="ingest-action" class="settings-item">Personal Email Ingestion</div>
     <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Files</div>
     <div id="settings-list" style="display: flex; flex-direction: column;"></div>
   </div>
   <div id="settings-editor-container" style="flex:1; display:flex; flex-direction:column; padding: 1rem; overflow-y:auto;">
     <textarea id="settings-textarea" spellcheck="false" style="flex:1; font-family: monospace; font-size: 0.9rem; background: #2a2a2a; color: #e8e8e8; border: 1px solid #444; padding: 0.75rem; resize: none; border-radius: 8px;"></textarea>
     <div id="settings-form" style="display:none; flex:1; flex-direction:column; max-width: 800px;"></div>
-    <div style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
+    <div id="ingest-panel" style="display:none; flex:1; flex-direction:column; max-width: 800px; min-height: 0;">
+      <div class="settings-section">
+        <div class="settings-section-title">Personal Email Ingestion</div>
+        <p class="form-comment" style="margin-top: 0;">
+          Runs <code>run-ingest.sh personal</code> in the pipeline container right now, instead of
+          waiting for the nightly 22:30 cron run. Set a lookback to backfill older mail: the
+          watermark is rewound to that many days ago (it never moves forward this way), and
+          already-processed emails are never re-filed.
+        </p>
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label" for="ingest-lookback">Lookback (days)</label>
+              <div class="form-comment">Ingest mail from this many days ago until now. Leave empty to keep the current watermark (just "run tonight's job now").</div>
+            </div>
+            <input id="ingest-lookback" class="form-input" type="number" min="0" step="1" placeholder="e.g. 7" style="width: 120px;">
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label">Dry run</label>
+              <div class="form-comment">Propose only (staging/personal/proposed.md), don't write to the vault. Note: even a dry run marks the fetched emails as processed - they won't be re-filed by a later live run.</div>
+            </div>
+            <label class="switch"><input id="ingest-dry-run" type="checkbox" checked><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label">Drain backlog</label>
+              <div class="form-comment">Each pass handles up to 25 emails; repeat passes until nothing new remains (capped at 20 passes).</div>
+            </div>
+            <label class="switch"><input id="ingest-drain" type="checkbox" checked><span class="slider"></span></label>
+          </div>
+        </div>
+        <div style="display: flex; gap: 1rem; align-items: center; margin-top: 0.5rem;">
+          <button id="ingest-run" style="background: #2b5797; color: white; padding: 0.6rem 1.2rem; border-radius: 6px; border: none; font-weight: bold; cursor: pointer;">Start Ingestion</button>
+          <span id="ingest-status" style="color: #888; font-size: 0.9rem;"></span>
+        </div>
+      </div>
+      <h3 style="margin: 0.5rem 0;">Run Log</h3>
+      <div id="ingest-log" style="flex: 1; min-height: 200px; background: #000; padding: 1rem; border-radius: 8px; border: 1px solid #333; color: #bbb; white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; overflow-y: auto;"></div>
+    </div>
+    <div id="settings-save-row" style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
       <span id="settings-status" style="font-size: 0.9rem; color: #aaa;"></span>
       <button id="settings-save" style="background: #2b5797; color: white;">Save</button>
     </div>
@@ -1413,6 +1459,8 @@ async function loadSetting(filename, el) {
   document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
   if (el) el.classList.add('active');
   currentSettingFile = filename;
+  document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('settings-save-row').style.display = 'flex';
   const status = document.getElementById('settings-status');
   const txtArea = document.getElementById('settings-textarea');
   const formDiv = document.getElementById('settings-form');
@@ -1596,6 +1644,98 @@ document.getElementById('settings-save').onclick = async () => {
     }
   } catch (e) {
     status.textContent = 'Error saving';
+  }
+};
+
+// --- Manual ingestion (settings > Actions) ---
+let ingestPollTimer = null;
+
+function showIngestPanel() {
+  document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
+  document.getElementById('ingest-action').classList.add('active');
+  currentSettingFile = null;
+  document.getElementById('settings-textarea').style.display = 'none';
+  document.getElementById('settings-form').style.display = 'none';
+  document.getElementById('settings-save-row').style.display = 'none';
+  document.getElementById('ingest-panel').style.display = 'flex';
+  // Re-attach to a run that's already in progress (e.g. after a page reload).
+  pollIngestStatus();
+}
+document.getElementById('ingest-action').onclick = showIngestPanel;
+
+function renderIngestStatus(s) {
+  const statusEl = document.getElementById('ingest-status');
+  const logEl = document.getElementById('ingest-log');
+  const runBtn = document.getElementById('ingest-run');
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  logEl.textContent = s.log || '';
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+  runBtn.disabled = s.running;
+  if (s.running) {
+    statusEl.textContent = 'Running... (pass ' + Math.max(s.passes + 1, 1) + ')';
+  } else if (s.finished) {
+    statusEl.textContent = s.exit_code === 0
+      ? 'Done: ' + s.passes + ' pass(es) completed.'
+      : 'Failed (exit code ' + s.exit_code + ') - see log.';
+  } else {
+    statusEl.textContent = '';
+  }
+}
+
+async function pollIngestStatus() {
+  clearTimeout(ingestPollTimer);
+  try {
+    const res = await fetch('/api/ingest/personal/status');
+    const s = await res.json();
+    renderIngestStatus(s);
+    if (s.running && document.getElementById('ingest-panel').style.display !== 'none') {
+      ingestPollTimer = setTimeout(pollIngestStatus, 2000);
+    }
+  } catch (e) {
+    document.getElementById('ingest-status').textContent = 'Error fetching status: ' + e.message;
+  }
+}
+
+document.getElementById('ingest-run').onclick = async () => {
+  const statusEl = document.getElementById('ingest-status');
+  const raw = document.getElementById('ingest-lookback').value.trim();
+  const body = {
+    dry_run: document.getElementById('ingest-dry-run').checked,
+    drain: document.getElementById('ingest-drain').checked,
+  };
+  if (raw !== '') {
+    const days = Number(raw);
+    if (!Number.isInteger(days) || days < 0) {
+      statusEl.textContent = 'Lookback must be a whole number of days (or empty).';
+      return;
+    }
+    body.lookback_days = days;
+  }
+  if (!body.dry_run && !confirm(
+      'Dry run is OFF: this run will write notes into your live vault' +
+      (body.lookback_days != null ? ' for the last ' + body.lookback_days + ' day(s) of email' : '') +
+      '. A vault snapshot is taken first. Continue?')) {
+    return;
+  }
+  statusEl.textContent = 'Starting...';
+  document.getElementById('ingest-run').disabled = true;
+  try {
+    const res = await fetch('/api/ingest/personal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      statusEl.textContent = err.error || ('Failed to start (HTTP ' + res.status + ').');
+      document.getElementById('ingest-run').disabled = false;
+      return;
+    }
+    document.getElementById('ingest-log').textContent = '';
+    pollIngestStatus();
+  } catch (e) {
+    statusEl.textContent = 'Error: ' + e.message;
+    document.getElementById('ingest-run').disabled = false;
   }
 };
 

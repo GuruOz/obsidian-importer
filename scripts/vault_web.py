@@ -218,6 +218,151 @@ def manage_setting(filename):
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+DOCKER_SOCK = "/var/run/docker.sock"
+PIPELINE_CONTAINER = "copilot-digest-pipeline"
+INGEST_LOG_CAP = 200_000  # chars kept in the in-memory run log
+INGEST_MAX_PASSES = 20    # drain-mode safety cap (25 emails/pass -> 500 emails)
+
+# Single manual-ingestion run at a time. State survives page reloads (the UI
+# re-attaches via the status endpoint) but not a vault-qa restart - the run
+# itself lives in the pipeline container and finishes either way; only the
+# log view is lost.
+INGEST_LOCK = threading.Lock()
+INGEST_STATE = {
+    "running": False, "log": "", "exit_code": None,
+    "passes": 0, "started": None, "finished": None,
+}
+
+
+def _docker_api(method, path, payload=None, stream=False):
+    """Talk to the Docker Engine API over the mounted socket via curl (same
+    transport as /api/system/restart). Returns a CompletedProcess, or a Popen
+    with piped stdout when stream=True."""
+    cmd = ["curl", "-sN", "--unix-socket", DOCKER_SOCK, "-X", method]
+    if payload is not None:
+        cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
+    cmd.append(f"http://localhost{path}")
+    if stream:
+        return subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def _ingest_append(text):
+    with INGEST_LOCK:
+        log = INGEST_STATE["log"] + text
+        if len(log) > INGEST_LOG_CAP:
+            log = log[-INGEST_LOG_CAP:]
+        INGEST_STATE["log"] = log
+
+
+def _run_ingest_pass(env_overrides):
+    """One `run-ingest.sh personal` execution inside the pipeline container.
+    Streams its output into INGEST_STATE["log"]; returns (exit_code, output)."""
+    create = _docker_api("POST", f"/containers/{PIPELINE_CONTAINER}/exec", {
+        "AttachStdout": True, "AttachStderr": True,
+        # Tty gives one raw merged stream instead of Docker's 8-byte-framed
+        # multiplex, which curl can't unframe.
+        "Tty": True,
+        "Env": env_overrides,
+        "Cmd": ["/app/scripts/run-ingest.sh", "personal"],
+    })
+    try:
+        exec_id = json.loads(create.stdout).get("Id")
+    except (ValueError, AttributeError):
+        exec_id = None
+    if not exec_id:
+        raise RuntimeError(f"docker exec create failed: {create.stdout or create.stderr}")
+
+    proc = _docker_api("POST", f"/exec/{exec_id}/start",
+                       {"Detach": False, "Tty": True}, stream=True)
+    chunks = []
+    for line in proc.stdout:
+        chunks.append(line)
+        _ingest_append(line)
+    proc.wait()
+
+    inspect = _docker_api("GET", f"/exec/{exec_id}/json")
+    try:
+        exit_code = json.loads(inspect.stdout).get("ExitCode")
+    except ValueError:
+        exit_code = None
+    if exit_code is None:
+        raise RuntimeError("could not determine ingestion exit code")
+    return exit_code, "".join(chunks)
+
+
+def _ingest_worker(env_overrides, max_passes):
+    exit_code = None
+    try:
+        for i in range(max_passes):
+            if i:
+                _ingest_append(f"\n===== pass {i + 1} =====\n")
+            exit_code, output = _run_ingest_pass(env_overrides)
+            with INGEST_LOCK:
+                INGEST_STATE["passes"] = i + 1
+            # run-ingest.sh exits 0 both after filing a batch and when the
+            # fetcher found nothing (benign exit 20), so the drained signal is
+            # its log line, not the exit code.
+            if exit_code != 0 or "Nothing new to ingest" in output:
+                break
+        else:
+            _ingest_append(f"\nStopped after {max_passes} passes (safety cap); "
+                           "run again to continue draining.\n")
+    except Exception as e:  # noqa: BLE001
+        _ingest_append(f"\nERROR: {e}\n")
+        exit_code = -1
+    finally:
+        with INGEST_LOCK:
+            INGEST_STATE["running"] = False
+            INGEST_STATE["exit_code"] = exit_code
+            INGEST_STATE["finished"] = time.time()
+
+
+@app.route("/api/ingest/personal", methods=["POST"])
+def ingest_personal():
+    """Manually run personal-email ingestion in the pipeline container.
+
+    Body (all optional):
+      lookback_days  int >= 0 - rewinds the watermark to now - N days for this
+                     run (never forward); omit to keep the current watermark.
+      dry_run        bool - override PERSONAL_MAIL_DRY_RUN for this run only.
+      drain          bool (default true) - repeat passes (25 emails each)
+                     until the backlog is empty, capped at INGEST_MAX_PASSES.
+    """
+    body = request.get_json(force=True, silent=True) or {}
+
+    lookback = body.get("lookback_days")
+    if lookback is not None:
+        if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback < 0:
+            return jsonify({"error": "lookback_days must be a non-negative integer"}), 400
+    dry_run = body.get("dry_run")
+    if dry_run is not None and not isinstance(dry_run, bool):
+        return jsonify({"error": "dry_run must be a boolean"}), 400
+
+    env_overrides = []
+    if lookback is not None:
+        env_overrides.append(f"PERSONAL_MAIL_LOOKBACK_DAYS={lookback}")
+    if dry_run is not None:
+        env_overrides.append(f"PERSONAL_MAIL_DRY_RUN={1 if dry_run else 0}")
+    max_passes = INGEST_MAX_PASSES if body.get("drain", True) else 1
+
+    with INGEST_LOCK:
+        if INGEST_STATE["running"]:
+            return jsonify({"error": "an ingestion run is already in progress"}), 409
+        INGEST_STATE.update(running=True, log="", exit_code=None, passes=0,
+                            started=time.time(), finished=None)
+    threading.Thread(target=_ingest_worker, args=(env_overrides, max_passes),
+                     daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ingest/personal/status")
+def ingest_personal_status():
+    with INGEST_LOCK:
+        return jsonify(dict(INGEST_STATE))
+
+
 @app.route("/api/system/restart", methods=["POST"])
 def system_restart():
     try:
