@@ -1,0 +1,4 @@
+# Everything in this repo runs inside Linux containers - force LF regardless
+# of the checkout platform's core.autocrlf, or a Windows checkout breaks every
+# shebang (#!/usr/bin/env bash\r -> env looks for a binary named "bash\r").
+* text=auto eol=lf
