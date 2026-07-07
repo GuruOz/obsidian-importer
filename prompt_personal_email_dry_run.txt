@@ -35,6 +35,8 @@ PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed
    the DATE CONTEXT above.
    - **DATA PRESERVATION RULE (LOSSLESS)**: For emails you would file, preserve substantive details - specific identifiers (booking references, amounts, dates, ticket/order numbers), names, exact quotes, concrete action items. Only omit true noise (signatures, tracking footers, boilerplate).
    - **NOTE GRANULARITY RULE**: Use highly specific note titles for distinct matters; never fold a distinct matter into a generic umbrella note. Create a new specific note unless the email is a direct continuation of that *exact same* matter.
+   - **FILENAME RULE**: Note titles become filenames and wikilink targets. Never use the characters # ^ | [ ] : \ / in a note title (e.g. 'Purview DLP escalation - TrackingID 2606080040000512', NOT '... - TrackingID#2606080040000512'): '#', '^', '|' and brackets are Obsidian link syntax, so links to such notes silently break; ': \ /' are invalid in filenames on some platforms.
+   - **LINK INTEGRITY RULE**: If you write a `[[New Note Title]]` link anywhere, you MUST also output/create that new note file. Never leave a dangling link. When creating the new note, you MUST populate it with relevant operational details and context; do not just leave it blank.
 5. For each email you would SKIP: one line with its subject and the skip reason.
 6. Write your full proposal to /work/staging/personal/proposed.md - the only file you
    may write. For each email-to-file: name the target daily note and any topic note,

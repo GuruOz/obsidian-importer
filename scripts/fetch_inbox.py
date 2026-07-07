@@ -176,10 +176,14 @@ def main():
     os.makedirs(staging_dir, exist_ok=True)
     os.makedirs(os.path.join(staging_dir, "archive"), exist_ok=True)
 
+    print(f"fetch_inbox: folder={inbox_folder!r} max_per_run={max_per_run} "
+          f"lookback_days={lookback_days} staging={staging_dir} ledger={ledger_file}")
     watermark = resolve_watermark(watermark_file, lookback_days)
+    print(f"fetch_inbox: effective watermark is {watermark}")
 
     token = get_access_token()
     ledger = load_ledger(ledger_file)
+    print(f"fetch_inbox: ledger holds {len(ledger)} already-processed message id(s)")
     folder_id = resolve_folder_id(token, inbox_folder)
 
     # List metadata only (no bodies), oldest-first from the watermark so a backlog
@@ -198,19 +202,27 @@ def main():
         "$filter": f"receivedDateTime ge {watermark}",
         "$select": "id,internetMessageId,subject,from,receivedDateTime",
     }
-    for _ in range(MAX_LIST_PAGES):
+    for page in range(1, MAX_LIST_PAGES + 1):
         listing = graph_get(token, list_path, params=list_params)
-        for msg in listing.get("value", []):
+        page_msgs = listing.get("value", [])
+        print(f"fetch_inbox: page {page}: listed {len(page_msgs)} message(s)")
+        for msg in page_msgs:
             received = msg.get("receivedDateTime", "") or ""
+            subject = msg.get("subject", "") or "(no subject)"
             if received > max_seen:
                 max_seen = received
             from_addr = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
             if digest_from and from_addr.lower() == digest_from:
+                print(f"fetch_inbox:   skip (digest sender) [{received}] {subject!r}")
                 continue
             if msg.get("internetMessageId") in ledger:
+                print(f"fetch_inbox:   skip (already processed) [{received}] {subject!r}")
                 continue
+            print(f"fetch_inbox:   stage [{received}] {from_addr}: {subject!r}")
             staged.append(msg)
             if len(staged) >= max_per_run:
+                print(f"fetch_inbox: reached max_per_run ({max_per_run}); "
+                      "remaining backlog drains on the next run")
                 break
         next_link = listing.get("@odata.nextLink", "")
         if len(staged) >= max_per_run or not next_link.startswith(GRAPH_BASE):
@@ -228,6 +240,7 @@ def main():
         print("No new inbox email to stage.")
         sys.exit(20)
 
+    print(f"fetch_inbox: fetching bodies for {len(staged)} staged message(s)...")
     for msg in staged:
         full = graph_get(token, f"/me/messages/{msg['id']}", params={"$select": "body"})
         msg["body"] = full.get("body", {})

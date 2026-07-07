@@ -143,13 +143,18 @@ EDITABLE_FILES = [
     "prompt_personal_email_dry_run.txt"
 ]
 
+PROPOSED_FILES = [
+    "data/staging/proposed.md",
+    "data/staging/personal/proposed.md"
+]
+
 @app.route("/api/settings")
 def list_settings():
-    return jsonify({"files": EDITABLE_FILES})
+    return jsonify({"files": EDITABLE_FILES, "proposed": PROPOSED_FILES})
 
-@app.route("/api/settings/<filename>", methods=["GET", "PUT"])
+@app.route("/api/settings/<path:filename>", methods=["GET", "PUT"])
 def manage_setting(filename):
-    if filename not in EDITABLE_FILES:
+    if filename not in EDITABLE_FILES and filename not in PROPOSED_FILES:
         return jsonify({"error": "invalid file"}), 400
     filepath = os.path.join(HOST_DIR, filename)
     
@@ -217,6 +222,58 @@ def manage_setting(filename):
                 return jsonify({"ok": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
+
+# Pipeline logs live at /work/logs in the pipeline container = ./data/logs on
+# the host = /host/data/logs here (the project root is mounted at /host).
+LOGS_DIR = os.path.join(HOST_DIR, "data", "logs")
+LOG_TAIL_DEFAULT = 500
+LOG_TAIL_MAX = 5000
+
+
+@app.route("/api/logs")
+def list_logs():
+    """List pipeline log files, newest-modified first."""
+    entries = []
+    try:
+        names = os.listdir(LOGS_DIR)
+    except OSError:
+        names = []
+    for name in names:
+        path = os.path.join(LOGS_DIR, name)
+        if not os.path.isfile(path):
+            continue
+        st = os.stat(path)
+        entries.append({"name": name, "size": st.st_size, "mtime": st.st_mtime})
+    entries.sort(key=lambda e: e["mtime"], reverse=True)
+    return jsonify({"files": entries})
+
+
+@app.route("/api/logs/<name>")
+def read_log(name):
+    # The log dir is flat; rejecting separators (Flask already blocks "/") and
+    # dot-names pins reads inside it without realpath gymnastics.
+    if "/" in name or "\\" in name or name.startswith("."):
+        return jsonify({"error": "invalid log name"}), 400
+    path = os.path.join(LOGS_DIR, name)
+    if not os.path.isfile(path):
+        return jsonify({"error": "log not found"}), 404
+    try:
+        lines = min(int(request.args.get("lines", LOG_TAIL_DEFAULT)), LOG_TAIL_MAX)
+    except ValueError:
+        lines = LOG_TAIL_DEFAULT
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    tail = all_lines[-lines:] if lines > 0 else all_lines
+    return jsonify({
+        "name": name,
+        "total_lines": len(all_lines),
+        "shown_lines": len(tail),
+        "content": "".join(tail),
+    })
+
 
 DOCKER_SOCK = "/var/run/docker.sock"
 PIPELINE_CONTAINER = "copilot-digest-pipeline"

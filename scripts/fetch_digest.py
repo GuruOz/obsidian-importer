@@ -47,8 +47,11 @@ def main():
     os.makedirs(staging_dir, exist_ok=True)
     os.makedirs(os.path.join(staging_dir, "archive"), exist_ok=True)
 
+    print(f"fetch_digest: folder={digest_folder!r} from={digest_from!r} "
+          f"subject_pattern={subject_pattern!r} staging={staging_dir}")
     token = get_access_token()
     ledger = load_ledger(ledger_file)
+    print(f"fetch_digest: ledger holds {len(ledger)} already-processed message id(s)")
     folder_id = resolve_folder_id(token, digest_folder)
 
     # Two-phase fetch: list metadata only (no bodies), then download bodies just for
@@ -65,17 +68,23 @@ def main():
     )
     messages = listing.get("value", [])
 
+    print(f"fetch_digest: listed {len(messages)} most-recent message(s) in folder")
     subject_re = re.compile(subject_pattern, re.IGNORECASE)
     matches = []
     for msg in messages:
         from_addr = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
         subject = msg.get("subject", "") or ""
+        received = msg.get("receivedDateTime", "") or ""
         if from_addr.lower() != digest_from.lower():
+            print(f"fetch_digest:   skip (wrong sender {from_addr}) [{received}] {subject!r}")
             continue
         if not subject_re.search(subject):
+            print(f"fetch_digest:   skip (subject mismatch) [{received}] {subject!r}")
             continue
         if msg.get("internetMessageId") in ledger:
+            print(f"fetch_digest:   skip (already processed) [{received}] {subject!r}")
             continue
+        print(f"fetch_digest:   match [{received}] {subject!r}")
         matches.append(msg)
 
     if not matches:

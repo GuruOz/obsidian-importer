@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 import traceback
 from datetime import datetime
 from openai import OpenAI
@@ -30,6 +31,20 @@ class AgentCancelled(RuntimeError):
     def __init__(self, partial_answer=""):
         super().__init__("cancelled by caller")
         self.partial_answer = partial_answer
+
+
+def _vlog(msg):
+    """Timestamped diagnostic line on stderr. This is the execution log the
+    simulator tab, the settings-page ingestion log, and the per-run
+    agent.<source>.<date>.json files all surface, so every step of a run is
+    reconstructable after the fact."""
+    print(f"[{datetime.now():%H:%M:%S}] {msg}", file=sys.stderr, flush=True)
+
+
+def _one_line(text, max_len=300):
+    """Collapse a tool result / model message to one truncated log line."""
+    s = " ".join(str(text).split())
+    return s[:max_len] + f"...[{len(s)} chars total]" if len(s) > max_len else s
 
 
 def _summarize_args(args, max_len=200):
@@ -426,14 +441,21 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
     """
     use_stream = stream_cb is not None or cancel_event is not None
     extractor = _AnswerExtractor(stream_cb)
+    # Track per-call token deltas even when the caller shares usage_out.
+    usage = usage_out if usage_out is not None else {}
 
-    for _ in range(max_loops):
+    for turn in range(1, max_loops + 1):
         if cancel_event is not None and cancel_event.is_set():
             raise AgentCancelled(extractor.text)
 
+        _vlog(f"turn {turn}/{max_loops}: calling {model} "
+              f"({len(messages)} messages in context)")
+        tokens_before = (usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+        t_llm = time.time()
+
         if use_stream:
             msg, calls, cancelled = _stream_completion(
-                client, model, messages, tools, cancel_event, extractor, usage_out)
+                client, model, messages, tools, cancel_event, extractor, usage)
             if cancelled:
                 # Discard the aborted completion's partial tool calls; keep the
                 # partial answer as plain assistant text so the history stays valid.
@@ -441,6 +463,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                     messages.append({"role": "assistant", "content": extractor.text})
                 raise AgentCancelled(extractor.text)
             messages.append(msg)
+            content = msg.get("content")
         else:
             try:
                 response = client.chat.completions.create(
@@ -451,14 +474,25 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 )
             except Exception as e:
                 raise AgentAPIError(f"API Error: {e}") from e
-            _add_usage(usage_out, getattr(response, "usage", None))
+            _add_usage(usage, getattr(response, "usage", None))
             msg = response.choices[0].message
             messages.append(msg)
             calls = [(tc.id, tc.function.name, tc.function.arguments)
                      for tc in (msg.tool_calls or [])]
+            content = msg.content
+
+        d_in = usage.get("input_tokens", 0) - tokens_before[0]
+        d_out = usage.get("output_tokens", 0) - tokens_before[1]
+        _vlog(f"turn {turn}: LLM responded in {time.time() - t_llm:.1f}s "
+              f"({d_in} in / {d_out} out tokens, {len(calls)} tool call(s))")
+        if content:
+            # The model's inter-tool commentary was previously invisible; it is
+            # often the only clue to WHY it chose a filing target.
+            _vlog(f"turn {turn}: model says: {_one_line(content)}")
 
         if not calls:
             # Model responded with text instead of finishing. Just prompt it to finish.
+            _vlog(f"turn {turn}: no tool call in response; nudging model to finish")
             messages.append({"role": "user", "content": "Please continue and use the finish tool when done."})
             continue
 
@@ -467,13 +501,12 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 args = json.loads(raw_args)
             except Exception as e:
                 error_msg = f"Error parsing JSON arguments: {e}"
-                print(f">> Tool Call: {func_name} - {error_msg} (raw: {raw_args!r})",
-                      file=sys.stderr)
+                _vlog(f">> Tool Call: {func_name} - {error_msg} (raw: {_one_line(raw_args)})")
                 messages.append({"role": "tool", "tool_call_id": call_id, "name": func_name,
                                  "content": error_msg})
                 continue
 
-            print(f">> Tool Call: {func_name}({_summarize_args(args)})", file=sys.stderr)
+            _vlog(f">> Tool Call: {func_name}({_summarize_args(args)})")
             if progress_cb is not None:
                 try:
                     progress_cb(func_name, args)
@@ -481,6 +514,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                     pass  # progress reporting must never break the agent loop
 
             if func_name == "finish":
+                _vlog(f"finish called: {_summarize_args(args, max_len=500)}")
                 # Answer this call (and any remaining parallel calls in the same
                 # assistant message) before returning, so the transcript stays
                 # valid if the caller reuses `messages` for a follow-up turn -
@@ -498,6 +532,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 raise AgentCancelled(extractor.text)
 
             handler = handlers.get(func_name)
+            t_tool = time.time()
             if handler is None:
                 result = f"Unknown function {func_name}"
             else:
@@ -511,7 +546,10 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 # returning "Access denied"/"Error ..." was invisible unless the
                 # model happened to mention it - the model can also just ignore
                 # the error string and call finish() as if nothing went wrong.
-                print(f"   !! {func_name} returned an error: {result}", file=sys.stderr)
+                _vlog(f"   !! {func_name} returned an error: {result}")
+            else:
+                _vlog(f"   << {func_name} ok in {time.time() - t_tool:.1f}s "
+                      f"({len(str(result))} chars): {_one_line(result, 200)}")
 
             messages.append({
                 "role": "tool",
@@ -520,6 +558,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
                 "content": str(result)
             })
 
+    _vlog(f"gave up: model never called finish within {max_loops} turns")
     return None
 
 
@@ -543,16 +582,23 @@ def main():
     # Inject the vault's conventions manifest (generated by profile_vault.py) so every
     # run is guaranteed to see it, rather than relying on the model choosing to read it.
     filing_rules_path = os.path.join(VAULT_DIR, "Filing_Rules.md")
+    filing_rules_chars = 0
     if os.path.exists(filing_rules_path):
         with open(filing_rules_path, "r", encoding="utf-8") as f:
-            system_content += "\n\nVault conventions (Filing_Rules.md):\n\n" + f.read()
+            rules = f.read()
+        filing_rules_chars = len(rules)
+        system_content += "\n\nVault conventions (Filing_Rules.md):\n\n" + rules
 
     messages = [
         {"role": "system", "content": system_content},
         {"role": "user", "content": prompt}
     ]
 
-    print(f"Starting custom agent loop with model {model} (DRY_RUN={DRY_RUN})...", file=sys.stderr)
+    _vlog(f"agent run starting: model={model} base_url={os.environ.get('LLM_BASE_URL', '')} "
+          f"DRY_RUN={DRY_RUN}")
+    _vlog(f"config: VAULT_DIR={VAULT_DIR} STAGING_DIR={STAGING_DIR} "
+          f"prompt={prompt_file} ({len(prompt)} chars) "
+          f"Filing_Rules.md={'injected, ' + str(filing_rules_chars) + ' chars' if filing_rules_chars else 'not found'}")
 
     handlers = {
         "read_file": lambda a: read_file(a.get("path", "")),
@@ -562,11 +608,15 @@ def main():
         "edit_file": lambda a: edit_file(a.get("path", ""), a.get("old_string", ""), a.get("new_string", "")),
     }
 
+    usage = {}
+    t_run = time.time()
     try:
-        finish_args = run_loop(client, model, messages, TOOLS, handlers)
+        finish_args = run_loop(client, model, messages, TOOLS, handlers, usage_out=usage)
     except AgentAPIError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
+    _vlog(f"agent run finished in {time.time() - t_run:.1f}s, total tokens: "
+          f"{usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out")
     if finish_args is None:
         print(json.dumps({"error": "Exceeded maximum tool call loops"}))
         sys.exit(1)

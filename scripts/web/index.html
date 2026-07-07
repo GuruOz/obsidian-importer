@@ -274,6 +274,7 @@
   <div id="tabs" style="flex: 1; display: flex; gap: 1rem; align-items: center; margin-left: 1rem;">
     <span class="tab active" data-view="view-chat">Chat</span>
     <span class="tab" data-view="view-settings">Settings</span>
+    <span class="tab" data-view="view-logs">Logs</span>
     <span class="tab" data-view="view-simulator">Test Simulator</span>
     <span class="tab" data-view="view-obsidian">Obsidian</span>
   </div>
@@ -300,8 +301,10 @@
   <div id="settings-sidebar" style="width: 220px; border-right: 1px solid #333; overflow-y: auto;">
     <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Actions</div>
     <div id="ingest-action" class="settings-item">Personal Email Ingestion</div>
-    <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Files</div>
+    <div style="font-weight: bold; color: #888; padding: 1rem 1rem 0.5rem; font-size: 0.8rem; text-transform: uppercase;">Files</div>
     <div id="settings-list" style="display: flex; flex-direction: column;"></div>
+    <div style="font-weight: bold; color: #888; padding: 1rem 1rem 0.5rem; font-size: 0.8rem; text-transform: uppercase;">Proposed MDs</div>
+    <div id="proposed-list" style="display: flex; flex-direction: column;"></div>
   </div>
   <div id="settings-editor-container" style="flex:1; display:flex; flex-direction:column; padding: 1rem; overflow-y:auto;">
     <textarea id="settings-textarea" spellcheck="false" style="flex:1; font-family: monospace; font-size: 0.9rem; background: #2a2a2a; color: #e8e8e8; border: 1px solid #444; padding: 0.75rem; resize: none; border-radius: 8px;"></textarea>
@@ -347,13 +350,36 @@
           <span id="ingest-status" style="color: #888; font-size: 0.9rem;"></span>
         </div>
       </div>
-      <h3 style="margin: 0.5rem 0;">Run Log</h3>
+      <h3 style="margin: 0.5rem 0;">Execution Log</h3>
       <div id="ingest-log" style="flex: 1; min-height: 200px; background: #000; padding: 1rem; border-radius: 8px; border: 1px solid #333; color: #bbb; white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; overflow-y: auto;"></div>
     </div>
     <div id="settings-save-row" style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
       <span id="settings-status" style="font-size: 0.9rem; color: #aaa;"></span>
       <button id="settings-save" style="background: #2b5797; color: white;">Save</button>
     </div>
+  </div>
+</div>
+<div id="view-logs" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
+  <div id="logs-sidebar" style="width: 280px; border-right: 1px solid #333; overflow-y: auto;">
+    <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Pipeline Logs</div>
+    <div id="logs-list" style="display: flex; flex-direction: column;"></div>
+  </div>
+  <div style="flex:1; display:flex; flex-direction:column; padding: 1rem; min-height:0;">
+    <div style="display:flex; gap:1rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
+      <strong id="logs-current" style="font-family:monospace; font-size:0.9rem;">Select a log file</strong>
+      <span id="logs-meta" style="color:#888; font-size:0.85rem;"></span>
+      <span style="flex:1;"></span>
+      <label style="font-size:0.85rem; color:#888;">Tail
+        <select id="logs-lines" style="margin-left:0.3rem;">
+          <option>200</option><option selected>500</option><option>2000</option><option>5000</option>
+        </select> lines
+      </label>
+      <label style="font-size:0.85rem; color:#888; display:flex; align-items:center; gap:0.35rem; cursor:pointer;">
+        <input type="checkbox" id="logs-follow"> Auto-refresh
+      </label>
+      <button id="logs-refresh" type="button">Refresh</button>
+    </div>
+    <div id="logs-content" style="flex:1; background:#000; padding:1rem; border-radius:8px; border:1px solid #333; color:#bbb; white-space:pre-wrap; font-family:monospace; font-size:0.8rem; overflow-y:auto;"></div>
   </div>
 </div>
 <div id="view-obsidian" class="view" style="display:none; flex:1; min-height:0; position: relative;">
@@ -1365,6 +1391,9 @@ document.querySelectorAll('.tab').forEach(t => {
     } else if (viewId === 'view-settings') {
       view.style.display = 'flex';
       loadSettingsList();
+    } else if (viewId === 'view-logs') {
+      view.style.display = 'flex';
+      loadLogsList();
     } else if (viewId === 'view-simulator') {
       view.style.display = 'flex';
     } else if (viewId === 'view-obsidian') {
@@ -1419,10 +1448,23 @@ async function loadSettingsList() {
       el.onclick = () => loadSetting(f, el);
       list.appendChild(el);
     });
+    
+    const propList = document.getElementById('proposed-list');
+    propList.innerHTML = '';
+    if (data.proposed) {
+      data.proposed.forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'settings-item';
+        el.textContent = f;
+        el.onclick = () => loadSetting(f, el);
+        propList.appendChild(el);
+      });
+    }
+
     if (data.files.length > 0 && !currentSettingFile) {
       loadSetting(data.files[0], list.firstChild);
     } else if (currentSettingFile) {
-      const activeEl = [...list.children].find(c => c.textContent === currentSettingFile);
+      const activeEl = [...document.querySelectorAll('.settings-item')].find(c => c.textContent === currentSettingFile);
       if (activeEl) activeEl.classList.add('active');
     }
   } catch (e) {
@@ -1644,6 +1686,76 @@ document.getElementById('settings-save').onclick = async () => {
     }
   } catch (e) {
     status.textContent = 'Error saving';
+    status.style.color = '#e74c3c';
+  }
+};
+
+// --- Logs ---
+let currentLogFile = null;
+let logRefreshInterval = null;
+
+async function loadLogsList() {
+  try {
+    const res = await fetch('/api/logs');
+    const data = await res.json();
+    const list = document.getElementById('logs-list');
+    list.innerHTML = '';
+    data.files.forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'settings-item';
+      el.textContent = f.name;
+      el.onclick = () => {
+        currentLogFile = f.name;
+        [...list.children].forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+        fetchLog();
+      };
+      list.appendChild(el);
+    });
+    if (data.files.length > 0 && !currentLogFile) {
+      currentLogFile = data.files[0].name;
+      list.firstChild.classList.add('active');
+      fetchLog();
+    } else if (currentLogFile) {
+      const activeEl = [...list.children].find(c => c.textContent === currentLogFile);
+      if (activeEl) activeEl.classList.add('active');
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+async function fetchLog() {
+  if (!currentLogFile) return;
+  try {
+    const lines = document.getElementById('logs-lines').value;
+    const res = await fetch(`/api/logs/${currentLogFile}?lines=${lines}`);
+    const data = await res.json();
+    
+    document.getElementById('logs-current').textContent = data.name;
+    document.getElementById('logs-meta').textContent = `Showing ${data.shown_lines} of ${data.total_lines} lines`;
+    
+    const content = document.getElementById('logs-content');
+    const isAtBottom = content.scrollHeight - content.scrollTop <= content.clientHeight + 10;
+    
+    content.textContent = data.content;
+    
+    if (isAtBottom || document.getElementById('logs-follow').checked) {
+      content.scrollTop = content.scrollHeight;
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+document.getElementById('logs-refresh').onclick = fetchLog;
+document.getElementById('logs-lines').onchange = fetchLog;
+document.getElementById('logs-follow').onchange = (e) => {
+  if (e.target.checked) {
+    fetchLog();
+    logRefreshInterval = setInterval(fetchLog, 2000);
+  } else {
+    clearInterval(logRefreshInterval);
   }
 };
 

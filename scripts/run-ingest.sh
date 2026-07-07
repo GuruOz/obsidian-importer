@@ -122,6 +122,9 @@ log() {
     echo "[$(date -Iseconds)] [${SOURCE}] $*" | tee -a "$DIGEST_LOG"
 }
 
+RUN_START_TS=$(date +%s)
+log "=== run start: source=${SOURCE} dry_run=${DRY_RUN} staging=${STAGING_DIR} ledger=${LEDGER_FILE} watermark_file=${WATERMARK_FILE}${WORK_DATE:+ work_date=${WORK_DATE}} ==="
+
 # --- Health check: is the Obsidian sync client up? Writes still land even if not,
 # but sync to other devices will be delayed until it comes back. Only runs when
 # OBSIDIAN_HEALTHCHECK_URL is set - e.g. not on a machine where a native Obsidian
@@ -148,10 +151,14 @@ log "Vault snapshot written to ${BACKUP_DIR}"
 find "$BACKUP_ROOT" -maxdepth 1 -mindepth 1 -type d -mtime +"${BACKUP_RETENTION_DAYS}" -exec rm -rf {} \;
 
 # --- Ingestion ---
+# Fetcher output is tee'd into the persistent run log so triage decisions
+# (staged/skipped per email) survive in the Logs tab, not just in cron.log.
+log "Fetching via ${FETCHER}..."
 set +e
-python3 "${SCRIPT_DIR}/${FETCHER}"
-FETCH_RC=$?
+python3 "${SCRIPT_DIR}/${FETCHER}" 2>&1 | tee -a "$DIGEST_LOG"
+FETCH_RC=${PIPESTATUS[0]}
 set -e
+log "Fetcher finished with exit ${FETCH_RC} after $(($(date +%s) - RUN_START_TS))s"
 
 if [ "$FETCH_RC" -eq 20 ]; then
     log "Nothing new to ingest."
@@ -189,11 +196,16 @@ AGENT_LOG="${LOG_DIR}/agent.${SOURCE}.${TODAY}.json"
     -not -path './smart-chats/*' \
     | sed 's|^\./||' | sort) > "${STAGING_DIR}/vault_index.txt"
 
-log "Invoking agent (LLM_MODEL: ${LLM_MODEL:-unknown})..."
+log "Invoking agent (LLM_MODEL: ${LLM_MODEL:-unknown}, prompt: ${PROMPT_FILE}, log: ${AGENT_LOG})..."
+AGENT_START_TS=$(date +%s)
+# tee (not redirect): the full agent transcript lands in AGENT_LOG for the Logs
+# tab / filing_report, AND streams to stdout so a manual run from the settings
+# page shows the agent's activity live instead of going silent for minutes.
 set +e
-python3 "/app/scripts/custom_agent_loop.py" "$PROMPT_FILE" > "$AGENT_LOG" 2>&1
-AGENT_RC=$?
+python3 "/app/scripts/custom_agent_loop.py" "$PROMPT_FILE" 2>&1 | tee "$AGENT_LOG"
+AGENT_RC=${PIPESTATUS[0]}
 set -e
+log "Agent finished with exit ${AGENT_RC} after $(($(date +%s) - AGENT_START_TS))s"
 
 if [ "$AGENT_RC" -ne 0 ]; then
     log "ERROR: Agent exited $AGENT_RC, see $AGENT_LOG"
@@ -251,3 +263,5 @@ tail -n 5000 "$DIGEST_LOG" > "${DIGEST_LOG}.tmp" && mv "${DIGEST_LOG}.tmp" "$DIG
 if [ -f "/work/logs/cron.log" ]; then
     tail -n 5000 "/work/logs/cron.log" > "/work/logs/cron.log.tmp" && mv "/work/logs/cron.log.tmp" "/work/logs/cron.log"
 fi
+
+log "=== run complete: source=${SOURCE} total $(($(date +%s) - RUN_START_TS))s ==="

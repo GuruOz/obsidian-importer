@@ -14,9 +14,27 @@ exits 0 so the orchestrator can fall back to its generic notification text.
 import json
 import os
 import sys
+import urllib.parse
 from datetime import datetime
 
 MAX_NOTES_IN_SUMMARY = 8
+
+
+def vault_link(path):
+    """Obsidian link for a vault-relative note path.
+
+    Plain [[name]] wikilinks silently break when the note name contains
+    wikilink syntax characters - '#' starts a heading anchor, '^' a block
+    anchor, '|' an alias - e.g. [[X - TrackingID#123]] is parsed as note "X -
+    TrackingID" + heading "123" and never resolves. For those names fall back
+    to a percent-encoded markdown link, which Obsidian resolves with the same
+    vault-wide shortest-path lookup."""
+    p = str(path).replace("\\", "/").strip("/")
+    name = note_name(p)
+    if not any(c in name for c in "#^|"):
+        return f"[[{name}]]"
+    target = p if p.endswith(".md") else f"{p}.md"
+    return f"[{name}]({urllib.parse.quote(target)})"
 
 
 def last_status_json(log_path):
@@ -79,7 +97,7 @@ def main():
     print(" | ".join(parts))
 
     if vault_log and status not in ("skipped_duplicate", "no_content"):
-        links = ", ".join(f"[[{note_name(p)}]]" for p in files) or "(no notes listed)"
+        links = ", ".join(vault_link(p) for p in files) or "(no notes listed)"
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         line = f"- {stamp} — **{status}**"
         if work_date:
