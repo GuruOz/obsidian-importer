@@ -4,12 +4,16 @@ file for the triage-and-file agent step.
 
 Design mirrors fetch_digest.py but for the whole Inbox instead of one sender:
 
-* First run writes a watermark set to "now" and exits benignly (exit 20) - this
-  is the "start from now" behaviour: nothing before today is ever ingested.
-* Every run after lists Inbox messages with receivedDateTime >= watermark
-  (capped, oldest-first, so a backlog drains across nights and a flood never
-  blows the context budget), skips the Copilot digest sender and anything
-  already ledgered, fetches bodies, and stages one combined markdown file.
+* First run seeds a watermark at now - PERSONAL_MAIL_LOOKBACK_DAYS (default 0,
+  i.e. "start from now": nothing before today is ever ingested). Changing the
+  lookback later rewinds the watermark (never forward) so older mail gets
+  backfilled; the ledger keeps already-filed emails from being re-filed.
+* Every run lists Inbox messages with receivedDateTime >= watermark (staging
+  capped at PERSONAL_MAIL_MAX_PER_RUN, oldest-first, so a backlog drains across
+  nights and a flood never blows the context budget), skips the Copilot digest
+  sender and anything already ledgered - following extra listing pages when a
+  window is dominated by skipped messages - fetches bodies, and stages one
+  combined markdown file.
 * Watermark and ledger both advance only after the whole run succeeds: the
   fetcher stages pending_ids.txt and pending_watermark.txt, and run-ingest.sh
   commits them only once the agent filing step has succeeded. A failed run
@@ -23,9 +27,10 @@ Exit codes (consumed by run-ingest.sh):
 """
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from graph_mail import (
+    GRAPH_BASE,
     env,
     get_access_token,
     graph_get,
@@ -38,9 +43,23 @@ from graph_mail import (
 # a single verbose email can't dominate the agent's context budget.
 BODY_CHAR_CAP = 12000
 
+# Listing pages followed per run. Skipped messages (digest sender, already
+# ledgered) don't count against max_per_run, so during a lookback backfill the
+# listing may need several pages to find max_per_run stageable emails; this
+# bounds the Graph calls a single night can make.
+MAX_LIST_PAGES = 10
+
+
+def utc_iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def now_utc_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return utc_iso(datetime.now(timezone.utc))
+
+
+def lookback_start_iso(days):
+    return utc_iso(datetime.now(timezone.utc) - timedelta(days=days))
 
 
 def read_watermark(path):
@@ -48,6 +67,60 @@ def read_watermark(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return f.read().strip() or None
+
+
+def write_text(path, text):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def read_lookback_days():
+    raw = (env("PERSONAL_MAIL_LOOKBACK_DAYS", "0") or "0").strip()
+    try:
+        days = int(raw)
+    except ValueError:
+        print(
+            f"Invalid PERSONAL_MAIL_LOOKBACK_DAYS={raw!r}; falling back to 0 (start from now).",
+            file=sys.stderr,
+        )
+        return 0
+    return max(days, 0)
+
+
+def resolve_watermark(watermark_file, lookback_days):
+    """Return the effective watermark, seeding or rewinding it for the lookback.
+
+    * No watermark yet (first run): seed it at now - lookback_days and commit
+      immediately (there is nothing pending to defer behind).
+    * Lookback setting changed since it was last applied: rewind the watermark
+      to now - lookback_days if that is earlier - never forward, so unprocessed
+      mail is never skipped. The ledger keeps backfilled-but-already-filed
+      emails from being re-filed. The last-applied value lives next to the
+      watermark so an unchanged setting doesn't rewind (and re-list the whole
+      window) every night.
+    """
+    lookback_state_file = watermark_file + ".lookback"
+    applied_raw = read_watermark(lookback_state_file)
+
+    watermark = read_watermark(watermark_file)
+    if watermark is None:
+        watermark = lookback_start_iso(lookback_days)
+        write_text(watermark_file, watermark)
+        write_text(lookback_state_file, str(lookback_days))
+        print(f"First run: watermark initialised at {watermark} ({lookback_days} day(s) back).")
+        return watermark
+
+    if applied_raw != str(lookback_days):
+        candidate = lookback_start_iso(lookback_days)
+        # Both are UTC "%Y-%m-%dT%H:%M:%SZ" strings, so lexicographic order is
+        # chronological order.
+        if candidate < watermark:
+            print(f"Lookback changed to {lookback_days} day(s): rewinding watermark {watermark} -> {candidate}.")
+            watermark = candidate
+            write_text(watermark_file, watermark)
+        write_text(lookback_state_file, str(lookback_days))
+    return watermark
 
 
 def body_to_markdown(message):
@@ -98,20 +171,12 @@ def main():
     # handled by its own source, isn't double-filed here.
     digest_from = (env("DIGEST_FROM", "") or "").lower()
     max_per_run = int(env("PERSONAL_MAIL_MAX_PER_RUN", "25"))
+    lookback_days = read_lookback_days()
 
     os.makedirs(staging_dir, exist_ok=True)
     os.makedirs(os.path.join(staging_dir, "archive"), exist_ok=True)
 
-    watermark = read_watermark(watermark_file)
-    if watermark is None:
-        # First run: anchor "now" and ingest nothing before today. Commit the
-        # watermark immediately (there's no successful agent run to defer behind
-        # on this benign first pass).
-        os.makedirs(os.path.dirname(watermark_file) or ".", exist_ok=True)
-        with open(watermark_file, "w", encoding="utf-8") as f:
-            f.write(now_utc_iso())
-        print(f"First run: watermark initialised at {watermark_file}. Starting from now.")
-        sys.exit(20)
+    watermark = resolve_watermark(watermark_file, lookback_days)
 
     token = get_access_token()
     ledger = load_ledger(ledger_file)
@@ -119,29 +184,47 @@ def main():
 
     # List metadata only (no bodies), oldest-first from the watermark so a backlog
     # drains deterministically across nights. `ge` + ledger dedup means the
-    # boundary message is re-listed but never re-filed.
-    listing = graph_get(
-        token,
-        f"/me/mailFolders/{folder_id}/messages",
-        params={
-            "$top": max_per_run,
-            "$orderby": "receivedDateTime asc",
-            "$filter": f"receivedDateTime ge {watermark}",
-            "$select": "id,internetMessageId,subject,from,receivedDateTime",
-        },
-    )
-    messages = listing.get("value", [])
-
+    # boundary message is re-listed but never re-filed. Skipped messages don't
+    # count against max_per_run, so keep following @odata.nextLink until enough
+    # stageable emails are found - otherwise a window full of skipped messages
+    # (e.g. daily digests on an otherwise-quiet inbox, or ledgered mail during a
+    # lookback backfill) would starve, and permanently wedge, the fetch.
     staged = []
-    for msg in messages:
-        from_addr = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
-        if digest_from and from_addr.lower() == digest_from:
-            continue
-        if msg.get("internetMessageId") in ledger:
-            continue
-        staged.append(msg)
+    max_seen = watermark  # newest receivedDateTime examined (staged or skipped)
+    list_path = f"/me/mailFolders/{folder_id}/messages"
+    list_params = {
+        "$top": max_per_run,
+        "$orderby": "receivedDateTime asc",
+        "$filter": f"receivedDateTime ge {watermark}",
+        "$select": "id,internetMessageId,subject,from,receivedDateTime",
+    }
+    for _ in range(MAX_LIST_PAGES):
+        listing = graph_get(token, list_path, params=list_params)
+        for msg in listing.get("value", []):
+            received = msg.get("receivedDateTime", "") or ""
+            if received > max_seen:
+                max_seen = received
+            from_addr = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
+            if digest_from and from_addr.lower() == digest_from:
+                continue
+            if msg.get("internetMessageId") in ledger:
+                continue
+            staged.append(msg)
+            if len(staged) >= max_per_run:
+                break
+        next_link = listing.get("@odata.nextLink", "")
+        if len(staged) >= max_per_run or not next_link.startswith(GRAPH_BASE):
+            break
+        list_path = next_link[len(GRAPH_BASE):]
+        list_params = None  # nextLink already carries the query (incl. skiptoken)
 
     if not staged:
+        if max_seen > watermark:
+            # Everything examined was deliberately skipped; advance the watermark
+            # past it now (nothing is pending behind the agent step) so the same
+            # skipped window isn't re-listed every night.
+            write_text(watermark_file, max_seen)
+            print(f"Watermark advanced to {max_seen} past {watermark} (all listed messages skipped).")
         print("No new inbox email to stage.")
         sys.exit(20)
 
@@ -167,16 +250,17 @@ def main():
 
     # Deferred commit: run-ingest.sh appends these ids to the ledger and advances
     # the watermark only after the agent step succeeds. Advance the watermark to
-    # the newest staged message so the next run continues past this batch.
+    # the newest message examined (staged or skipped - listing is oldest-first,
+    # so nothing unexamined is left behind it) so the next run continues past
+    # this batch.
     pending_ids = os.path.join(staging_dir, "pending_ids.txt")
     with open(pending_ids, "w", encoding="utf-8") as f:
         for msg in staged:
             f.write(msg["internetMessageId"] + "\n")
 
-    new_watermark = max(m.get("receivedDateTime", "") for m in staged) or watermark
     pending_watermark = os.path.join(staging_dir, "pending_watermark.txt")
     with open(pending_watermark, "w", encoding="utf-8") as f:
-        f.write(new_watermark)
+        f.write(max_seen)
 
     print(f"Staged {len(staged)} inbox email(s) to {combined_path}")
 

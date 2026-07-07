@@ -1390,9 +1390,10 @@ const envSchema = {
   "DIGEST_FROM": { label: "Copilot Digest Sender", category: "Email Parsing", type: "text", desc: "The email address that sends the digest." },
   "DIGEST_SUBJECT_PATTERN": { label: "Digest Subject Pattern", category: "Email Parsing", type: "text", desc: "Regex pattern for the subject line." },
   "DIGEST_FOLDER": { label: "Digest Folder", category: "Email Parsing", type: "text", desc: "Outlook folder where digests are stored (e.g. Inbox/CopilotDigest)." },
-  "PERSONAL_MAIL_DRY_RUN": { label: "Personal Mail Dry Run", category: "Personal Mail Triage", type: "toggle", desc: "Keep personal mail proposing-only." },
-  "PERSONAL_MAIL_FOLDER": { label: "Personal Mail Folder", category: "Personal Mail Triage", type: "text", desc: "Folder to read personal mail from (e.g. Inbox)." },
-  "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max Personal Emails Per Run", category: "Personal Mail Triage", type: "number" },
+  "PERSONAL_MAIL_DRY_RUN": { label: "Personal Mail Dry Run", category: "Personal Mail Triage", type: "toggle", default: "1", desc: "Keep personal mail proposing-only." },
+  "PERSONAL_MAIL_FOLDER": { label: "Personal Mail Folder", category: "Personal Mail Triage", type: "text", default: "Inbox", desc: "Folder to read personal mail from (e.g. Inbox)." },
+  "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max Personal Emails Per Run", category: "Personal Mail Triage", type: "number", default: "25" },
+  "PERSONAL_MAIL_LOOKBACK_DAYS": { label: "Email Lookback (Days)", category: "Personal Mail Triage", type: "number", default: "0", desc: "How far back to process personal email. 0 = only mail arriving after setup. Increasing it backfills older mail on the next run (already-processed emails are never re-filed)." },
   "LLM_BASE_URL": { label: "LLM Base URL", category: "AI Agent Configuration", type: "text", desc: "OpenAI-compatible API endpoint." },
   "LLM_API_KEY": { label: "LLM API Key", category: "AI Agent Configuration", type: "password", desc: "Your API key for the LLM provider." },
   "LLM_MODEL": { label: "LLM Model", category: "AI Agent Configuration", type: "text", desc: "The model to use (e.g., gpt-4o, deepseek-chat)." },
@@ -1439,11 +1440,10 @@ async function loadSetting(filename, el) {
         return sections[name];
       };
 
-      data.fields.forEach(f => {
-        if (f.type === 'kv') {
-           const schema = envSchema[f.key] || { label: f.key, category: "Advanced Settings", type: "text", desc: "" };
+      const renderEnvField = (key, value, synthetic) => {
+           const schema = envSchema[key] || { label: key, category: "Advanced Settings", type: "text", desc: "" };
            const sec = getSection(schema.category);
-           
+
            const group = document.createElement('div');
            group.className = 'form-group';
            
@@ -1471,8 +1471,8 @@ async function loadSetting(filename, el) {
              input = document.createElement('input');
              input.type = 'checkbox';
              input.className = 'env-input';
-             input.dataset.key = f.key;
-             input.checked = f.value === '1' || f.value.toLowerCase() === 'true';
+             input.dataset.key = key;
+             input.checked = value === '1' || value.toLowerCase() === 'true';
              const slider = document.createElement('span');
              slider.className = 'slider';
              switchDiv.appendChild(input);
@@ -1481,13 +1481,13 @@ async function loadSetting(filename, el) {
            } else if (schema.type === 'select') {
              input = document.createElement('select');
              input.className = 'form-select env-input';
-             input.dataset.key = f.key;
+             input.dataset.key = key;
              input.style.width = '200px';
              schema.options.forEach(opt => {
                const o = document.createElement('option');
                o.value = opt;
                o.textContent = opt;
-               if (f.value === opt) o.selected = true;
+               if (value === opt) o.selected = true;
                input.appendChild(o);
              });
              header.appendChild(input);
@@ -1495,15 +1495,37 @@ async function loadSetting(filename, el) {
              input = document.createElement('input');
              input.type = schema.type || 'text';
              input.className = 'form-input env-input';
-             input.dataset.key = f.key;
-             input.value = f.value;
+             input.dataset.key = key;
+             input.value = value;
              input.style.flex = '1';
              input.style.maxWidth = '300px';
              header.appendChild(input);
            }
-           
+           if (synthetic) {
+             // Not present in .env yet; the save handler only writes it once the
+             // user actually changes it from the built-in default.
+             input.dataset.synthetic = '1';
+             input.dataset.default = value;
+           }
+
            group.appendChild(header);
            sec.appendChild(group);
+      };
+
+      const presentKeys = new Set();
+      data.fields.forEach(f => {
+        if (f.type === 'kv') {
+          presentKeys.add(f.key);
+          renderEnvField(f.key, f.value, false);
+        }
+      });
+
+      // Settings that ship commented-out in .env (so they never arrive as kv
+      // fields) but have a known default: render them too, so they can be
+      // discovered and edited from here.
+      Object.keys(envSchema).forEach(key => {
+        if (!presentKeys.has(key) && envSchema[key].default !== undefined) {
+          renderEnvField(key, envSchema[key].default, true);
         }
       });
       
@@ -1531,11 +1553,17 @@ document.getElementById('settings-save').onclick = async () => {
     if (currentSettingFile === '.env') {
       const updates = {};
       document.querySelectorAll('.env-input').forEach(inp => {
-        if (inp.type === 'checkbox') {
-          updates[inp.dataset.key] = inp.checked ? '1' : '0';
-        } else {
-          updates[inp.dataset.key] = inp.value;
+        const val = inp.type === 'checkbox' ? (inp.checked ? '1' : '0') : inp.value;
+        if (inp.dataset.synthetic === '1') {
+          const def = inp.dataset.default || '';
+          const defNorm = inp.type === 'checkbox'
+            ? ((def === '1' || def.toLowerCase() === 'true') ? '1' : '0')
+            : def;
+          // Still at the built-in default: keep it out of .env so unrelated
+          // saves don't materialise every defaulted key.
+          if (val === defNorm) return;
         }
+        updates[inp.dataset.key] = val;
       });
       payload = { updates };
     } else {
