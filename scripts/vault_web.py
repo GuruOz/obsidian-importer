@@ -181,16 +181,27 @@ def manage_setting(filename):
                 with open(filepath, "r", encoding="utf-8") as f:
                     old_lines = f.read().splitlines()
                 new_lines = []
+                seen_keys = set()
                 for line in old_lines:
                     if not line.strip().startswith("#") and "=" in line:
                         k, v = line.split("=", 1)
                         k = k.strip()
+                        seen_keys.add(k)
                         if k in updates:
                             new_lines.append(f"{k}={updates[k]}")
                         else:
                             new_lines.append(line)
                     else:
                         new_lines.append(line)
+                # Keys not present as an uncommented line (e.g. settings that ship
+                # commented-out in .env.example) would otherwise be dropped
+                # silently; append them so saving a new setting actually sticks.
+                missing = [k for k in updates if k not in seen_keys]
+                if missing:
+                    new_lines.append("")
+                    new_lines.append("# Added via settings UI")
+                    for k in missing:
+                        new_lines.append(f"{k}={updates[k]}")
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write("\n".join(new_lines) + "\n")
                 return jsonify({"ok": True})
