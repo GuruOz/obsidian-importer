@@ -494,11 +494,24 @@ def simulator_email():
         env["STAGING_DIR"] = tmpdir
         env["DRY_RUN"] = "1"
         
-        # 4. Run agent
-        cmd = [sys.executable, "/app/scripts/custom_agent_loop.py", prompt_file]
+        # 4. Patch the prompt to point to tmpdir instead of hardcoded paths
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            prompt_text = f.read()
+            
+        if sim_type == "digest":
+            prompt_text = prompt_text.replace("/work/staging", tmpdir)
+        else:
+            prompt_text = prompt_text.replace("/work/staging/personal", tmpdir)
+            
+        sim_prompt_file = os.path.join(tmpdir, "prompt.txt")
+        with open(sim_prompt_file, "w", encoding="utf-8") as f:
+            f.write(prompt_text)
+        
+        # 5. Run agent
+        cmd = [sys.executable, "/app/scripts/custom_agent_loop.py", sim_prompt_file]
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True)
         
-        # 5. Read proposed.md
+        # 6. Read proposed.md
         proposed_path = os.path.join(tmpdir, "proposed.md")
         proposed_content = ""
         if os.path.exists(proposed_path):
