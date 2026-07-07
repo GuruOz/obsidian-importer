@@ -240,17 +240,22 @@ fi
 
 # --- Commit the ledger only now that the run demonstrably succeeded. If anything
 # above failed, the staged ids stay un-ledgered and tomorrow's fetch retries them. ---
-if [ -s "${STAGING_DIR}/pending_ids.txt" ]; then
-    cat "${STAGING_DIR}/pending_ids.txt" >> "$LEDGER_FILE"
-    rm -f "${STAGING_DIR}/pending_ids.txt"
-    log "Ledger updated."
-fi
+if [ "$DRY_RUN" != "1" ]; then
+    if [ -s "${STAGING_DIR}/pending_ids.txt" ]; then
+        cat "${STAGING_DIR}/pending_ids.txt" >> "$LEDGER_FILE"
+        rm -f "${STAGING_DIR}/pending_ids.txt"
+        log "Ledger updated."
+    fi
 
-# The fetcher may stage a watermark to advance only on success (same deferral as
-# the ledger); commit it now that the run succeeded.
-if [ -f "${STAGING_DIR}/pending_watermark.txt" ]; then
-    mv "${STAGING_DIR}/pending_watermark.txt" "$WATERMARK_FILE"
-    log "Watermark advanced."
+    # The fetcher may stage a watermark to advance only on success (same deferral as
+    # the ledger); commit it now that the run succeeded.
+    if [ -f "${STAGING_DIR}/pending_watermark.txt" ]; then
+        mv "${STAGING_DIR}/pending_watermark.txt" "$WATERMARK_FILE"
+        log "Watermark advanced."
+    fi
+else
+    log "DRY_RUN enabled: skipping ledger and watermark commit."
+    rm -f "${STAGING_DIR}/pending_ids.txt" "${STAGING_DIR}/pending_watermark.txt"
 fi
 
 # --- Maintenance: Prune old logs & archives ---
