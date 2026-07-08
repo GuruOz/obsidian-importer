@@ -18,6 +18,11 @@ Design mirrors fetch_digest.py but for the whole Inbox instead of one sender:
   fetcher stages pending_ids.txt and pending_watermark.txt, and run-ingest.sh
   commits them only once the agent filing step has succeeded. A failed run
   therefore re-picks-up the same emails next night instead of losing them.
+* Dry runs (DRY_RUN=1) never persist anything: no watermark seed/rewind/advance
+  and no lookback state, so a dry run leaves the pipeline exactly as it found it.
+* PERSONAL_MAIL_START_DATE / PERSONAL_MAIL_END_DATE (YYYY-MM-DD, local time,
+  end inclusive) switch the run to an explicit-window backfill: the watermark
+  is bypassed and left untouched, and only the ledger records progress.
 
 Exit codes (consumed by run-ingest.sh):
     0   staged one or more emails successfully
@@ -88,7 +93,7 @@ def read_lookback_days():
     return max(days, 0)
 
 
-def resolve_watermark(watermark_file, lookback_days):
+def resolve_watermark(watermark_file, lookback_days, dry_run):
     """Return the effective watermark, seeding or rewinding it for the lookback.
 
     * No watermark yet (first run): seed it at now - lookback_days and commit
@@ -99,6 +104,10 @@ def resolve_watermark(watermark_file, lookback_days):
       emails from being re-filed. The last-applied value lives next to the
       watermark so an unchanged setting doesn't rewind (and re-list the whole
       window) every night.
+
+    A dry run computes the same effective watermark but never writes it (or the
+    lookback state) to disk - a dry run must leave no trace, so a later live
+    run sees exactly the same mail.
     """
     lookback_state_file = watermark_file + ".lookback"
     applied_raw = read_watermark(lookback_state_file)
@@ -106,9 +115,13 @@ def resolve_watermark(watermark_file, lookback_days):
     watermark = read_watermark(watermark_file)
     if watermark is None:
         watermark = lookback_start_iso(lookback_days)
-        write_text(watermark_file, watermark)
-        write_text(lookback_state_file, str(lookback_days))
-        print(f"First run: watermark initialised at {watermark} ({lookback_days} day(s) back).")
+        if dry_run:
+            print(f"First run (dry run): using watermark {watermark} "
+                  f"({lookback_days} day(s) back) without persisting it.")
+        else:
+            write_text(watermark_file, watermark)
+            write_text(lookback_state_file, str(lookback_days))
+            print(f"First run: watermark initialised at {watermark} ({lookback_days} day(s) back).")
         return watermark
 
     if applied_raw != str(lookback_days):
@@ -116,11 +129,49 @@ def resolve_watermark(watermark_file, lookback_days):
         # Both are UTC "%Y-%m-%dT%H:%M:%SZ" strings, so lexicographic order is
         # chronological order.
         if candidate < watermark:
-            print(f"Lookback changed to {lookback_days} day(s): rewinding watermark {watermark} -> {candidate}.")
+            print(f"Lookback changed to {lookback_days} day(s): rewinding watermark "
+                  f"{watermark} -> {candidate}{' (dry run: not persisted)' if dry_run else ''}.")
             watermark = candidate
-            write_text(watermark_file, watermark)
-        write_text(lookback_state_file, str(lookback_days))
+            if not dry_run:
+                write_text(watermark_file, watermark)
+        if not dry_run:
+            write_text(lookback_state_file, str(lookback_days))
     return watermark
+
+
+def read_window():
+    """Parse the optional explicit ingestion window from
+    PERSONAL_MAIL_START_DATE / PERSONAL_MAIL_END_DATE (YYYY-MM-DD, interpreted
+    in the container's local timezone, end date inclusive).
+
+    Returns (start_iso, end_exclusive_iso) in UTC, or (None, None) when no
+    window is set. When a window is active the watermark is bypassed entirely
+    (neither read as the start point nor advanced afterwards) - the run is a
+    stateless backfill over exactly that date range, with the ledger still
+    preventing double-filing.
+    """
+    start_raw = (env("PERSONAL_MAIL_START_DATE", "") or "").strip()
+    end_raw = (env("PERSONAL_MAIL_END_DATE", "") or "").strip()
+    if not start_raw and not end_raw:
+        return None, None
+    if not start_raw:
+        sys.exit("PERSONAL_MAIL_END_DATE requires PERSONAL_MAIL_START_DATE to be set too.")
+
+    def parse_date(raw, name):
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").astimezone()
+        except ValueError:
+            sys.exit(f"{name} must be YYYY-MM-DD, got {raw!r}")
+
+    start_local = parse_date(start_raw, "PERSONAL_MAIL_START_DATE")
+    start_iso = utc_iso(start_local.astimezone(timezone.utc))
+    end_iso = None
+    if end_raw:
+        end_local = parse_date(end_raw, "PERSONAL_MAIL_END_DATE")
+        if end_local < start_local:
+            sys.exit(f"PERSONAL_MAIL_END_DATE ({end_raw}) is before PERSONAL_MAIL_START_DATE ({start_raw}).")
+        end_iso = utc_iso((end_local + timedelta(days=1)).astimezone(timezone.utc))
+    return start_iso, end_iso
 
 
 def body_to_markdown(message):
@@ -172,14 +223,26 @@ def main():
     digest_from = (env("DIGEST_FROM", "") or "").lower()
     max_per_run = int(env("PERSONAL_MAIL_MAX_PER_RUN", "25"))
     lookback_days = read_lookback_days()
+    # run-ingest.sh exports the per-source resolved DRY_RUN; fall back to the
+    # personal default (1, safe) when run standalone. Dry runs must not persist
+    # any watermark/lookback state - see resolve_watermark().
+    dry_run = (os.environ.get("DRY_RUN") or env("PERSONAL_MAIL_DRY_RUN", "1") or "1") == "1"
+    window_start, window_end = read_window()
 
     os.makedirs(staging_dir, exist_ok=True)
     os.makedirs(os.path.join(staging_dir, "archive"), exist_ok=True)
 
     print(f"fetch_inbox: folder={inbox_folder!r} max_per_run={max_per_run} "
-          f"lookback_days={lookback_days} staging={staging_dir} ledger={ledger_file}")
-    watermark = resolve_watermark(watermark_file, lookback_days)
-    print(f"fetch_inbox: effective watermark is {watermark}")
+          f"lookback_days={lookback_days} dry_run={dry_run} staging={staging_dir} ledger={ledger_file}")
+    if window_start is not None:
+        # Explicit window: a stateless backfill. The watermark is neither used
+        # nor touched; the ledger alone prevents double-filing.
+        watermark = window_start
+        print(f"fetch_inbox: explicit window {window_start} .. {window_end or '(now)'} "
+              "- watermark bypassed and left untouched")
+    else:
+        watermark = resolve_watermark(watermark_file, lookback_days, dry_run)
+        print(f"fetch_inbox: effective watermark is {watermark}")
 
     token = get_access_token()
     ledger = load_ledger(ledger_file)
@@ -195,11 +258,14 @@ def main():
     # lookback backfill) would starve, and permanently wedge, the fetch.
     staged = []
     max_seen = watermark  # newest receivedDateTime examined (staged or skipped)
+    list_filter = f"receivedDateTime ge {watermark}"
+    if window_end is not None:
+        list_filter += f" and receivedDateTime lt {window_end}"
     list_path = f"/me/mailFolders/{folder_id}/messages"
     list_params = {
         "$top": max_per_run,
         "$orderby": "receivedDateTime asc",
-        "$filter": f"receivedDateTime ge {watermark}",
+        "$filter": list_filter,
         "$select": "id,internetMessageId,subject,from,receivedDateTime",
     }
     for page in range(1, MAX_LIST_PAGES + 1):
@@ -231,10 +297,11 @@ def main():
         list_params = None  # nextLink already carries the query (incl. skiptoken)
 
     if not staged:
-        if max_seen > watermark:
+        if max_seen > watermark and window_start is None and not dry_run:
             # Everything examined was deliberately skipped; advance the watermark
             # past it now (nothing is pending behind the agent step) so the same
-            # skipped window isn't re-listed every night.
+            # skipped window isn't re-listed every night. Never during a dry run
+            # (leave no trace) or an explicit window (stateless backfill).
             write_text(watermark_file, max_seen)
             print(f"Watermark advanced to {max_seen} past {watermark} (all listed messages skipped).")
         print("No new inbox email to stage.")
@@ -272,8 +339,16 @@ def main():
             f.write(msg["internetMessageId"] + "\n")
 
     pending_watermark = os.path.join(staging_dir, "pending_watermark.txt")
-    with open(pending_watermark, "w", encoding="utf-8") as f:
-        f.write(max_seen)
+    if window_start is None:
+        with open(pending_watermark, "w", encoding="utf-8") as f:
+            f.write(max_seen)
+    else:
+        # Explicit window: never stage a watermark. Committing max_seen (which is
+        # inside the window, possibly far in the past) would rewind the nightly
+        # watermark and re-list everything after it.
+        if os.path.exists(pending_watermark):
+            os.remove(pending_watermark)
+        print("Explicit window: watermark not staged; ledger alone records progress.")
 
     print(f"Staged {len(staged)} inbox email(s) to {combined_path}")
 

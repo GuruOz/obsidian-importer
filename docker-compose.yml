@@ -26,6 +26,11 @@ services:
       - .env
     environment:
       - TZ=Asia/Singapore
+    # Lets LLM_BASE_URL reach a local model server on the host (e.g. Ollama at
+    # http://host.docker.internal:11434/v1). Built into Docker Desktop; this
+    # mapping makes it work on Linux hosts too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Isolated vault, managed by the standalone obsidian container above.
       - obsidian_only_vault:/vault
@@ -44,6 +49,8 @@ services:
       - .env
     environment:
       - TZ=Asia/Singapore
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - obsidian_only_vault:/vault:ro
       # Durable chat history (SQLite). The vault mount is read-only, so the

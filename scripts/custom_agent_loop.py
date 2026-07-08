@@ -279,12 +279,20 @@ def render_prompt(prompt):
 
 
 def make_client():
-    """Build the OpenAI-compatible client from LLM_* env vars, or raise ConfigError."""
-    api_key = os.environ.get("LLM_API_KEY")
+    """Build the OpenAI-compatible client from LLM_* env vars, or raise ConfigError.
+
+    LLM_API_KEY is optional so local OpenAI-compatible servers work out of the
+    box - Ollama (http://host.docker.internal:11434/v1), LM Studio, llama.cpp
+    etc. accept any key. The SDK insists on a non-empty string, so a harmless
+    placeholder is sent when none is configured; hosted providers will simply
+    reject it, which surfaces as a clear 401 instead of a missing-var error.
+    """
+    api_key = os.environ.get("LLM_API_KEY") or "ollama"
     base_url = os.environ.get("LLM_BASE_URL")
     model = os.environ.get("LLM_MODEL")
-    if not all([api_key, base_url, model]):
-        raise ConfigError("LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL must be set for custom agent.")
+    if not all([base_url, model]):
+        raise ConfigError("LLM_BASE_URL and LLM_MODEL must be set for custom agent "
+                          "(plus LLM_API_KEY unless the endpoint is a local server like Ollama).")
     return OpenAI(api_key=api_key, base_url=base_url), model
 
 

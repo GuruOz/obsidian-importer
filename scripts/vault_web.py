@@ -15,6 +15,7 @@ import time
 import uuid
 import subprocess
 import tempfile
+from datetime import datetime
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 
@@ -288,6 +289,7 @@ INGEST_LOCK = threading.Lock()
 INGEST_STATE = {
     "running": False, "log": "", "exit_code": None,
     "passes": 0, "started": None, "finished": None,
+    "stop_requested": False,
 }
 
 
@@ -358,10 +360,24 @@ def _ingest_worker(env_overrides, max_passes):
             exit_code, output = _run_ingest_pass(env_overrides)
             with INGEST_LOCK:
                 INGEST_STATE["passes"] = i + 1
+                stop_requested = INGEST_STATE["stop_requested"]
+            if stop_requested:
+                _ingest_append("\nStopped by user.\n")
+                break
             # run-ingest.sh exits 0 both after filing a batch and when the
             # fetcher found nothing (benign exit 20), so the drained signal is
             # its log line, not the exit code.
             if exit_code != 0 or "Nothing new to ingest" in output:
+                break
+            # A dry run never commits the ledger/watermark, so a second pass
+            # would just re-stage the same emails - one pass is all there is.
+            # (Belt to the endpoint's braces: this also catches dry-run-by-env
+            # when the request didn't pass dry_run explicitly.)
+            if "Dry-run complete" in output:
+                if max_passes > 1:
+                    _ingest_append("\nDry run: single pass only (dry runs don't advance "
+                                   "the ledger/watermark, so draining would repeat the "
+                                   "same batch).\n")
                 break
         else:
             _ingest_append(f"\nStopped after {max_passes} passes (safety cap); "
@@ -376,6 +392,16 @@ def _ingest_worker(env_overrides, max_passes):
             INGEST_STATE["finished"] = time.time()
 
 
+def _valid_date(s):
+    if not isinstance(s, str):
+        return False
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 @app.route("/api/ingest/personal", methods=["POST"])
 def ingest_personal():
     """Manually run personal-email ingestion in the pipeline container.
@@ -383,9 +409,16 @@ def ingest_personal():
     Body (all optional):
       lookback_days  int >= 0 - rewinds the watermark to now - N days for this
                      run (never forward); omit to keep the current watermark.
+      start_date     "YYYY-MM-DD" - explicit-window backfill: ingest mail
+                     received on/after this date. Bypasses the watermark and
+                     leaves it untouched (the ledger still dedupes). Mutually
+                     exclusive with lookback_days.
+      end_date       "YYYY-MM-DD" (inclusive) - end of the explicit window;
+                     requires start_date. Omit for "until now".
       dry_run        bool - override PERSONAL_MAIL_DRY_RUN for this run only.
       drain          bool (default true) - repeat passes (25 emails each)
                      until the backlog is empty, capped at INGEST_MAX_PASSES.
+                     Ignored for dry runs (nothing advances, so one pass only).
     """
     body = request.get_json(force=True, silent=True) or {}
 
@@ -393,6 +426,17 @@ def ingest_personal():
     if lookback is not None:
         if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback < 0:
             return jsonify({"error": "lookback_days must be a non-negative integer"}), 400
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
+    for label, value in (("start_date", start_date), ("end_date", end_date)):
+        if value is not None and not _valid_date(value):
+            return jsonify({"error": f"{label} must be a YYYY-MM-DD string"}), 400
+    if end_date is not None and start_date is None:
+        return jsonify({"error": "end_date requires start_date"}), 400
+    if start_date is not None and end_date is not None and end_date < start_date:
+        return jsonify({"error": "end_date must not be before start_date"}), 400
+    if start_date is not None and lookback is not None:
+        return jsonify({"error": "use either lookback_days or start_date/end_date, not both"}), 400
     dry_run = body.get("dry_run")
     if dry_run is not None and not isinstance(dry_run, bool):
         return jsonify({"error": "dry_run must be a boolean"}), 400
@@ -400,17 +444,50 @@ def ingest_personal():
     env_overrides = []
     if lookback is not None:
         env_overrides.append(f"PERSONAL_MAIL_LOOKBACK_DAYS={lookback}")
+    if start_date is not None:
+        env_overrides.append(f"PERSONAL_MAIL_START_DATE={start_date}")
+    if end_date is not None:
+        env_overrides.append(f"PERSONAL_MAIL_END_DATE={end_date}")
     if dry_run is not None:
         env_overrides.append(f"PERSONAL_MAIL_DRY_RUN={1 if dry_run else 0}")
     max_passes = INGEST_MAX_PASSES if body.get("drain", True) else 1
+    if dry_run:
+        max_passes = 1  # dry runs never advance state; draining would repeat the batch
 
     with INGEST_LOCK:
         if INGEST_STATE["running"]:
             return jsonify({"error": "an ingestion run is already in progress"}), 409
         INGEST_STATE.update(running=True, log="", exit_code=None, passes=0,
-                            started=time.time(), finished=None)
+                            started=time.time(), finished=None, stop_requested=False)
     threading.Thread(target=_ingest_worker, args=(env_overrides, max_passes),
                      daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ingest/personal/stop", methods=["POST"])
+def ingest_personal_stop():
+    """Stop the in-flight manual ingestion run: flag the worker to not start
+    another pass, then SIGTERM the run's processes inside the pipeline
+    container. Safe mid-batch: the ledger/watermark only commit at the end of
+    a successful pass, so an aborted batch is re-fetched by the next run."""
+    with INGEST_LOCK:
+        if not INGEST_STATE["running"]:
+            return jsonify({"error": "no ingestion run in progress"}), 409
+        INGEST_STATE["stop_requested"] = True
+    create = _docker_api("POST", f"/containers/{PIPELINE_CONTAINER}/exec", {
+        "AttachStdout": True, "AttachStderr": True, "Tty": True,
+        # pkill exits 1 when nothing matched (e.g. stop pressed between passes);
+        # that's fine - the worker also checks stop_requested between passes.
+        "Cmd": ["pkill", "-TERM", "-f",
+                "run-ingest.sh|fetch_inbox.py|custom_agent_loop.py"],
+    })
+    try:
+        exec_id = json.loads(create.stdout).get("Id")
+    except (ValueError, AttributeError):
+        exec_id = None
+    if not exec_id:
+        return jsonify({"error": f"docker exec create failed: {create.stdout or create.stderr}"}), 500
+    _docker_api("POST", f"/exec/{exec_id}/start", {"Detach": False, "Tty": True})
     return jsonify({"ok": True})
 
 

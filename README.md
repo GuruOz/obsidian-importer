@@ -222,13 +222,22 @@ files the ones worth keeping:
   archive to `Raw Email/Personal Mail - <date>.md`.
 
 It runs nightly at 22:30 (an hour after the digest). Optional overrides —
-including pointing it at a different (even local) model via
-`PERSONAL_MAIL_LLM_BASE_URL`/`PERSONAL_MAIL_LLM_MODEL` — are documented in
-`.env.example`. Run one on demand with:
+including pointing it at a different model via
+`PERSONAL_MAIL_LLM_BASE_URL`/`PERSONAL_MAIL_LLM_MODEL`, e.g. a **local Ollama
+server** (`http://host.docker.internal:11434/v1`, no API key needed — see
+`.env.example`) — are documented in `.env.example`. Run one on demand with:
 
 ```
 docker compose exec pipeline scripts/run-ingest.sh personal
 ```
+
+Or from the web UI's **Settings → Personal Email Ingestion** panel, which can
+also **stop** a run mid-flight (safe: nothing is marked processed until a pass
+completes, so aborted emails are re-fetched next time), backfill with either a
+lookback or an explicit **start/end date window** (the window bypasses the
+nightly watermark and leaves it untouched), and dry-run without side effects —
+dry runs never touch the ledger or watermark, so a later live run sees the
+same mail again.
 
 > Whole-inbox mode sends every new email body (capped) to your configured LLM
 > endpoint — broader exposure than the digest-only flow. The per-source model
