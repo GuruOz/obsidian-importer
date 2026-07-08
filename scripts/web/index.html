@@ -97,6 +97,16 @@
   .settings-item { padding: 0.5rem 1rem; cursor: pointer; color: #ccc; font-size: 0.85rem; }
   .settings-item:hover { background: #2a2a2a; }
   .settings-item.active { background: #333; color: #fff; }
+  .settings-nav-title { padding: 1rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600;
+                        color: #888; text-transform: uppercase; letter-spacing: 0.04em; }
+  .settings-subitem { padding: 0.3rem 1rem 0.3rem 1.9rem; cursor: pointer; color: #999; font-size: 0.8rem; }
+  .settings-subitem:hover { color: #fff; background: #2a2a2a; }
+  .settings-cat-blurb { color: #999; font-size: 0.85rem; margin: -0.5rem 0 1.1rem; line-height: 1.4; }
+  .settings-subhead { font-size: 0.85rem; font-weight: 600; color: #aaa; margin: 1.25rem 0 0.75rem;
+                      text-transform: uppercase; letter-spacing: 0.03em; }
+  .preset-btn { background: #333; color: #ddd; border: 1px solid #444; border-radius: 6px;
+                padding: 0.3rem 0.75rem; font-size: 0.8rem; cursor: pointer; }
+  .preset-btn:hover { background: #3d3d3d; border-color: #555; }
   .sess-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sess-act { display: none; gap: 0.1rem; flex-shrink: 0; }
   .sess:hover .sess-act { display: flex; }
@@ -228,6 +238,12 @@
     .form-label { color: #111; }
     .form-input, .form-select { background: #fafafa; color: #111; border-color: #ccc; }
     .form-comment { color: #666; }
+    .settings-subitem { color: #666; }
+    .settings-subitem:hover { color: #000; background: #e2e2e2; }
+    .settings-cat-blurb { color: #666; }
+    .settings-subhead { color: #555; }
+    .preset-btn { background: #e8e8e8; color: #333; border-color: #ccc; }
+    .preset-btn:hover { background: #ddd; border-color: #bbb; }
     .slider { background-color: #ccc; }
     #sb-toggle:hover { background: #d8d8d8; }
     .msg.assistant { background: #eee; }
@@ -298,13 +314,16 @@
   </form>
 </div>
 <div id="view-settings" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
-  <div id="settings-sidebar" style="width: 220px; border-right: 1px solid #333; overflow-y: auto;">
-    <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Actions</div>
-    <div id="ingest-action" class="settings-item">Personal Email Ingestion</div>
-    <div style="font-weight: bold; color: #888; padding: 1rem 1rem 0.5rem; font-size: 0.8rem; text-transform: uppercase;">Files</div>
-    <div id="settings-list" style="display: flex; flex-direction: column;"></div>
-    <div style="font-weight: bold; color: #888; padding: 1rem 1rem 0.5rem; font-size: 0.8rem; text-transform: uppercase;">Proposed MDs</div>
+  <div id="settings-sidebar" style="width: 240px; border-right: 1px solid #333; overflow-y: auto;">
+    <div class="settings-nav-title">Actions</div>
+    <div id="ingest-action" class="settings-item">Run Email Ingestion</div>
+    <div class="settings-nav-title">Settings</div>
+    <div id="settings-all-item" class="settings-item">All Settings</div>
+    <div id="settings-cat-list" style="display: flex; flex-direction: column;"></div>
+    <div class="settings-nav-title">Review Proposals</div>
     <div id="proposed-list" style="display: flex; flex-direction: column;"></div>
+    <div class="settings-nav-title">Advanced</div>
+    <div id="settings-list" style="display: flex; flex-direction: column;"></div>
   </div>
   <div id="settings-editor-container" style="flex:1; display:flex; flex-direction:column; padding: 1rem; overflow-y:auto;">
     <textarea id="settings-textarea" spellcheck="false" style="flex:1; font-family: monospace; font-size: 0.9rem; background: #2a2a2a; color: #e8e8e8; border: 1px solid #444; padding: 0.75rem; resize: none; border-radius: 8px;"></textarea>
@@ -1454,201 +1473,446 @@ document.querySelectorAll('.tab').forEach(t => {
 });
 
 // --- Settings ---
-let currentSettingFile = null;
+// The settings UI is organized by topic, not by config file: "All Settings"
+// renders every option from .env (plus the run times from crontab) as one
+// friendly form with a single Save. Raw files stay reachable under Advanced.
+let currentSettingFile = null;   // '__all__', a filename, or null (action panel)
+let scheduleState = null;        // parsed crontab backing the Schedule card
+
+const FILE_LABELS = {
+  "crontab": "Schedule file (crontab)",
+  "prompt_template.txt": "Prompt: work digest — live",
+  "prompt_dry_run.txt": "Prompt: work digest — dry run",
+  "prompt_personal_email.txt": "Prompt: personal email — live",
+  "prompt_personal_email_dry_run.txt": "Prompt: personal email — dry run",
+  "prompt_vault_profile.txt": "Prompt: vault profiler",
+  "prompt_weekly_rollup.txt": "Prompt: weekly review",
+  "data/staging/proposed.md": "Work digest proposal",
+  "data/staging/personal/proposed.md": "Personal email proposal",
+};
+
+const CATEGORIES = [
+  { name: "Work Digest", blurb: "The nightly job that reads your Microsoft 365 Copilot work-summary email and files it into the vault." },
+  { name: "Personal Email", blurb: "The nightly triage of your inbox: the agent skips noise (newsletters, OTPs, receipts) and files what matters. Use the Run Email Ingestion action on the left to run it on demand." },
+  { name: "Schedule", blurb: "When the automatic jobs run. Times are in the pipeline container's timezone (Asia/Singapore by default). Schedule changes take effect after a restart — you'll be offered one when you save." },
+  { name: "AI Model", blurb: "Which AI reads and files your email. Any OpenAI-compatible service works — pick a preset or fill the fields manually. A local Ollama server is free and keeps your email on your own machine." },
+  { name: "Notifications", blurb: "Get a phone notification after each run via the free ntfy app. Pick any hard-to-guess topic name, subscribe to the same topic in the app, done. Leave blank to disable." },
+  { name: "Microsoft Account", blurb: "How the pipeline signs in to read your mailbox (read-only access). Usually set once during setup and never touched again." },
+  { name: "Chat Assistant", blurb: "The “ask your vault” chat on this page's Chat tab." },
+  { name: "Safety & Backups", blurb: "A full vault snapshot is taken before every run, so mistakes are always recoverable." },
+  { name: "Advanced", blurb: "Container-internal paths and plumbing. You almost never need to change these — they must match docker-compose.yml if you do." },
+];
+
+const LLM_PRESETS = [
+  { name: "Ollama (local, free)", base: "http://host.docker.internal:11434/v1", model: "", modelHint: "e.g. qwen2.5:14b — must be pulled with `ollama pull` first" },
+  { name: "DeepSeek", base: "https://api.deepseek.com", model: "deepseek-chat" },
+  { name: "OpenRouter", base: "https://openrouter.ai/api/v1", model: "", modelHint: "e.g. deepseek/deepseek-chat" },
+];
+
+const CRON_JOBS = [
+  { id: "digest", match: "run-digest.sh", label: "Work digest", desc: "Fetches and files the nightly Copilot digest.", weekly: false },
+  { id: "personal", match: "run-ingest.sh personal", label: "Personal email triage", desc: "Triage-and-file pass over the inbox.", weekly: false },
+  { id: "weekly", match: "run-weekly.sh", label: "Weekly review note", desc: "Writes the week's rollup note.", weekly: true },
+];
+const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
 async function loadSettingsList() {
   try {
     const res = await fetch('/api/settings');
     const data = await res.json();
     const list = document.getElementById('settings-list');
     list.innerHTML = '';
-    data.files.forEach(f => {
+    // Raw .env is deliberately not listed: every key in it (known or unknown)
+    // is already editable from the All Settings form.
+    data.files.filter(f => f !== '.env').forEach(f => {
       const el = document.createElement('div');
       el.className = 'settings-item';
-      el.textContent = f;
+      el.textContent = FILE_LABELS[f] || f;
+      el.dataset.file = f;
       el.onclick = () => loadSetting(f, el);
       list.appendChild(el);
     });
-    
+
     const propList = document.getElementById('proposed-list');
     propList.innerHTML = '';
-    if (data.proposed) {
-      data.proposed.forEach(f => {
-        const el = document.createElement('div');
-        el.className = 'settings-item';
-        el.textContent = f;
-        el.onclick = () => loadSetting(f, el);
-        propList.appendChild(el);
-      });
-    }
+    (data.proposed || []).forEach(f => {
+      const el = document.createElement('div');
+      el.className = 'settings-item';
+      el.textContent = FILE_LABELS[f] || f;
+      el.dataset.file = f;
+      el.onclick = () => loadSetting(f, el);
+      propList.appendChild(el);
+    });
 
-    if (data.files.length > 0 && !currentSettingFile) {
-      loadSetting(data.files[0], list.firstChild);
-    } else if (currentSettingFile) {
-      const activeEl = [...document.querySelectorAll('.settings-item')].find(c => c.textContent === currentSettingFile);
+    if (currentSettingFile && currentSettingFile !== '__all__') {
+      const activeEl = [...document.querySelectorAll('.settings-item')].find(c => c.dataset.file === currentSettingFile);
       if (activeEl) activeEl.classList.add('active');
+    } else {
+      renderAllSettings();
     }
   } catch (e) {
     console.error(e);
   }
 }
+document.getElementById('settings-all-item').onclick = () => renderAllSettings();
 
+// Every known setting, in display order. Category names must match CATEGORIES.
+// `default` makes a key render even when it isn't in .env yet (it's only
+// written once the user changes it). `subhead` opens a labelled sub-group.
 const envSchema = {
-  "GRAPH_CLIENT_ID": { label: "Microsoft Graph Client ID", category: "Microsoft Graph Authentication", type: "text", desc: "The Application (client) ID from your Azure Entra app registration." },
-  "GRAPH_TENANT": { label: "Microsoft Graph Tenant", category: "Microsoft Graph Authentication", type: "select", options: ["consumers", "common", "organizations"], desc: "Typically 'consumers' for personal Microsoft accounts." },
-  "DIGEST_FROM": { label: "Copilot Digest Sender", category: "Email Parsing", type: "text", desc: "The email address that sends the digest." },
-  "DIGEST_SUBJECT_PATTERN": { label: "Digest Subject Pattern", category: "Email Parsing", type: "text", desc: "Regex pattern for the subject line." },
-  "DIGEST_FOLDER": { label: "Digest Folder", category: "Email Parsing", type: "text", desc: "Outlook folder where digests are stored (e.g. Inbox/CopilotDigest)." },
-  "PERSONAL_MAIL_DRY_RUN": { label: "Personal Mail Dry Run", category: "Personal Mail Triage", type: "toggle", default: "1", desc: "Keep personal mail proposing-only." },
-  "PERSONAL_MAIL_FOLDER": { label: "Personal Mail Folder", category: "Personal Mail Triage", type: "text", default: "Inbox", desc: "Folder to read personal mail from (e.g. Inbox)." },
-  "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max Personal Emails Per Run", category: "Personal Mail Triage", type: "number", default: "25" },
-  "PERSONAL_MAIL_LOOKBACK_DAYS": { label: "Email Lookback (Days)", category: "Personal Mail Triage", type: "number", default: "0", desc: "How far back to process personal email. 0 = only mail arriving after setup. Increasing it backfills older mail on the next run (already-processed emails are never re-filed)." },
-  "LLM_BASE_URL": { label: "LLM Base URL", category: "AI Agent Configuration", type: "text", desc: "OpenAI-compatible API endpoint." },
-  "LLM_API_KEY": { label: "LLM API Key", category: "AI Agent Configuration", type: "password", desc: "Your API key for the LLM provider." },
-  "LLM_MODEL": { label: "LLM Model", category: "AI Agent Configuration", type: "text", desc: "The model to use (e.g., gpt-4o, deepseek-chat)." },
-  "VAULT_QA_PORT": { label: "Vault QA Port", category: "Vault QA Settings", type: "number" },
-  "VAULT_QA_DB": { label: "Vault QA Database Path", category: "Vault QA Settings", type: "text" },
-  "VAULT_QA_MAX_TURNS": { label: "Max Chat Turns", category: "Vault QA Settings", type: "number" },
-  "VAULT_QA_MAX_SESSIONS": { label: "Max Chat Sessions", category: "Vault QA Settings", type: "number" },
-  "VAULT_QA_RECENCY_HALFLIFE_DAYS": { label: "Recency Half-life (Days)", category: "Vault QA Settings", type: "number" },
-  "VAULT_QA_RECENCY_FLOOR": { label: "Recency Floor", category: "Vault QA Settings", type: "text" },
-  "DRY_RUN": { label: "Global Dry Run Mode", category: "Safety", type: "toggle", desc: "If enabled, changes are written to staging instead of modifying the vault." },
-  "BACKUP_RETENTION_DAYS": { label: "Backup Retention (Days)", category: "Safety", type: "number" },
-  "OBSIDIAN_HEALTHCHECK_URL": { label: "Obsidian Healthcheck URL", category: "Integrations", type: "text" },
-  "NTFY_TOPIC": { label: "Ntfy Topic", category: "Integrations", type: "text", desc: "Topic name for mobile push notifications (ntfy.sh)." }
+  // Work Digest
+  "DIGEST_FROM": { label: "Sender address", category: "Work Digest", type: "text", default: "", desc: "Only email from this address is treated as a work digest." },
+  "DIGEST_SUBJECT_PATTERN": { label: "Subject filter (optional)", category: "Work Digest", type: "text", default: "", desc: "Only subjects matching this pattern count. Leave blank to accept any subject from the sender." },
+  "DIGEST_FOLDER": { label: "Mail folder", category: "Work Digest", type: "text", default: "Inbox/CopilotDigest", desc: "The Outlook folder the digest lands in. Use \"Inbox\" if you don't have a rule moving digests into a folder." },
+  "DRY_RUN": { label: "Dry run — propose only", category: "Work Digest", type: "toggle", default: "1", desc: "When on, the digest job writes its filing plan to a proposal (see Review Proposals on the left) instead of changing the vault. Turn off to file for real." },
+
+  // Personal Email
+  "PERSONAL_MAIL_DRY_RUN": { label: "Dry run — propose only", category: "Personal Email", type: "toggle", default: "1", desc: "Independent of the work digest's dry run, so one can go live while the other still proposes. Dry runs leave no trace — nothing is marked as processed." },
+  "PERSONAL_MAIL_FOLDER": { label: "Mail folder", category: "Personal Email", type: "text", default: "Inbox", desc: "The folder to triage. Nested folders are written \"Parent/Child\"." },
+  "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max emails per run", category: "Personal Email", type: "number", default: "25", desc: "A backlog drains at this pace per nightly run. The Run Email Ingestion action can drain a whole backlog at once." },
+  "PERSONAL_MAIL_LOOKBACK_DAYS": { label: "Lookback (days)", category: "Personal Email", type: "number", default: "0", desc: "How far before setup to backfill. 0 = only mail arriving after setup. Raising it backfills older mail; already-processed email is never re-filed." },
+
+  // AI Model
+  "LLM_BASE_URL": { label: "Service address (base URL)", category: "AI Model", type: "text", default: "", desc: "The AI provider's OpenAI-compatible endpoint. Use a preset above or paste your provider's URL." },
+  "LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "", desc: "From your AI provider. Leave blank for a local Ollama server — local servers don't check it." },
+  "LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "", desc: "e.g. deepseek-chat — or for Ollama, a model you've pulled, like qwen2.5:14b." },
+  "PERSONAL_MAIL_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Personal email override (optional)", desc: "Personal email can use a different AI than the work digest — e.g. keep personal mail on a local Ollama model for privacy. Leave blank to use the main model above." },
+  "PERSONAL_MAIL_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
+  "PERSONAL_MAIL_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },
+
+  // Notifications
+  "NTFY_TOPIC": { label: "ntfy topic", category: "Notifications", type: "text", default: "", desc: "e.g. copilot-digest-a1b2c3. Anyone who knows the topic can read your notifications, so make it unguessable." },
+
+  // Microsoft Account
+  "GRAPH_CLIENT_ID": { label: "App (client) ID", category: "Microsoft Account", type: "text", default: "", desc: "The Application (client) ID from your Azure Entra app registration (see the README for the one-time setup)." },
+  "GRAPH_TENANT": { label: "Account type", category: "Microsoft Account", type: "select", options: ["consumers", "common", "organizations"], default: "consumers", desc: "\"consumers\" for personal Microsoft accounts (Hotmail / Outlook.com)." },
+
+  // Chat Assistant
+  "VAULT_QA_MAX_TURNS": { label: "Chat memory (turns)", category: "Chat Assistant", type: "number", default: "20", desc: "How many back-and-forth turns the assistant remembers per chat." },
+  "VAULT_QA_RECENCY_HALFLIFE_DAYS": { label: "Freshness boost half-life (days)", category: "Chat Assistant", type: "number", default: "90", desc: "Search ranks newer notes higher; a note's boost halves every this-many days." },
+  "VAULT_QA_RECENCY_FLOOR": { label: "Freshness floor (0–1)", category: "Chat Assistant", type: "text", default: "0.5", desc: "How far old notes can sink in search ranking. 1 disables the age penalty entirely." },
+
+  // Safety & Backups
+  "BACKUP_RETENTION_DAYS": { label: "Keep backups for (days)", category: "Safety & Backups", type: "number", default: "14", desc: "Pre-run snapshots older than this are deleted. Snapshots are incremental — unchanged files cost no extra space." },
+
+  // Advanced
+  "VAULT_QA_PORT": { label: "Chat UI port", category: "Advanced", type: "number", default: "8420" },
+  "VAULT_QA_MAX_SESSIONS": { label: "Chat session cache size", category: "Advanced", type: "number", default: "50" },
+  "VAULT_QA_DB": { label: "Chat history database", category: "Advanced", type: "text", default: "/data/sessions.db" },
+  "OBSIDIAN_HEALTHCHECK_URL": { label: "Obsidian health check URL", category: "Advanced", type: "text", default: "", desc: "Only for the dockerized Obsidian (headless) deployment. Leave blank when a desktop Obsidian app syncs the vault." },
+  "VAULT_DIR": { label: "Vault path", category: "Advanced", type: "text", default: "/vault" },
+  "WORKDIR": { label: "Work directory", category: "Advanced", type: "text", default: "/work" },
+  "STAGING_DIR": { label: "Digest staging directory", category: "Advanced", type: "text", default: "/work/staging" },
+  "LOG_DIR": { label: "Log directory", category: "Advanced", type: "text", default: "/work/logs" },
+  "LEDGER_FILE": { label: "Digest ledger file", category: "Advanced", type: "text", default: "/work/processed_ids.txt" },
+  "MSAL_CACHE_FILE": { label: "Microsoft sign-in cache", category: "Advanced", type: "text", default: "/work/msal_cache.json" },
+  "PERSONAL_MAIL_STAGING_DIR": { label: "Personal mail staging directory", category: "Advanced", type: "text", default: "/work/staging/personal" },
+  "PERSONAL_MAIL_LEDGER_FILE": { label: "Personal mail ledger file", category: "Advanced", type: "text", default: "/work/personal_processed_ids.txt" },
+  "PERSONAL_MAIL_WATERMARK_FILE": { label: "Personal mail watermark file", category: "Advanced", type: "text", default: "/work/personal_watermark.txt" },
 };
 
-async function loadSetting(filename, el) {
+function selectNavItem(el) {
   document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
   if (el) el.classList.add('active');
-  currentSettingFile = filename;
+}
+
+function makeEnvField(key, value, synthetic) {
+  const schema = envSchema[key] || { label: key, type: "text", desc: "Custom setting from .env (not recognized by this page)." };
+
+  const group = document.createElement('div');
+  group.className = 'form-group';
+
+  const header = document.createElement('div');
+  header.className = 'form-header';
+
+  const infoDiv = document.createElement('div');
+  const label = document.createElement('label');
+  label.className = 'form-label';
+  label.textContent = schema.label;
+  infoDiv.appendChild(label);
+
+  if (schema.desc) {
+    const desc = document.createElement('div');
+    desc.className = 'form-comment';
+    desc.textContent = schema.desc;
+    infoDiv.appendChild(desc);
+  }
+  header.appendChild(infoDiv);
+
+  let input;
+  if (schema.type === 'toggle') {
+    const switchDiv = document.createElement('label');
+    switchDiv.className = 'switch';
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.className = 'env-input';
+    input.dataset.key = key;
+    input.checked = value === '1' || value.toLowerCase() === 'true';
+    const slider = document.createElement('span');
+    slider.className = 'slider';
+    switchDiv.appendChild(input);
+    switchDiv.appendChild(slider);
+    header.appendChild(switchDiv);
+  } else if (schema.type === 'select') {
+    input = document.createElement('select');
+    input.className = 'form-select env-input';
+    input.dataset.key = key;
+    input.style.width = '200px';
+    schema.options.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt;
+      o.textContent = opt;
+      if (value === opt) o.selected = true;
+      input.appendChild(o);
+    });
+    header.appendChild(input);
+  } else {
+    input = document.createElement('input');
+    input.type = schema.type || 'text';
+    input.className = 'form-input env-input';
+    input.dataset.key = key;
+    input.value = value;
+    input.style.flex = '1';
+    input.style.maxWidth = '300px';
+    header.appendChild(input);
+  }
+  if (synthetic) {
+    // Not present in .env yet; the save handler only writes it once the
+    // user actually changes it from the built-in default.
+    input.dataset.synthetic = '1';
+    input.dataset.default = value;
+  }
+
+  group.appendChild(header);
+  return group;
+}
+
+// The Schedule card is backed by the crontab file rather than .env: the three
+// known job lines are parsed into time (and weekday) pickers, and saving
+// rewrites only those fields on those lines, preserving comments and flags.
+function parseCrontab(text) {
+  const lines = text.split('\n');
+  const jobs = {};
+  lines.forEach((line, idx) => {
+    const m = line.match(/^\s*(\d{1,2})\s+(\d{1,2})\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)$/);
+    if (!m) return;
+    CRON_JOBS.forEach(j => {
+      if (!jobs[j.id] && m[6].includes(j.match)) {
+        jobs[j.id] = { idx, min: +m[1], hour: +m[2], dom: m[3], mon: m[4], dow: m[5], rest: m[6] };
+      }
+    });
+  });
+  return { lines, jobs };
+}
+
+function buildScheduleCard(section, cronText) {
+  scheduleState = parseCrontab(cronText);
+  CRON_JOBS.forEach(j => {
+    const job = scheduleState.jobs[j.id];
+    const group = document.createElement('div');
+    group.className = 'form-group';
+    const header = document.createElement('div');
+    header.className = 'form-header';
+    const info = document.createElement('div');
+    const label = document.createElement('label');
+    label.className = 'form-label';
+    label.textContent = j.label;
+    info.appendChild(label);
+    const desc = document.createElement('div');
+    desc.className = 'form-comment';
+    desc.textContent = job ? j.desc
+      : j.desc + " (couldn't read this job's schedule — edit the schedule file under Advanced instead)";
+    info.appendChild(desc);
+    header.appendChild(info);
+    if (job) {
+      const controls = document.createElement('div');
+      controls.style.cssText = 'display:flex; gap:0.5rem; align-items:center; flex-shrink:0;';
+      if (j.weekly) {
+        const sel = document.createElement('select');
+        sel.className = 'form-select';
+        sel.id = 'sched-' + j.id + '-dow';
+        sel.style.width = '130px';
+        DOW_NAMES.forEach((n, i) => {
+          const o = document.createElement('option');
+          o.value = i;
+          o.textContent = n;
+          if (String(i) === String(job.dow)) o.selected = true;
+          sel.appendChild(o);
+        });
+        controls.appendChild(sel);
+      }
+      const t = document.createElement('input');
+      t.type = 'time';
+      t.className = 'form-input';
+      t.id = 'sched-' + j.id;
+      t.style.width = '120px';
+      t.value = String(job.hour).padStart(2, '0') + ':' + String(job.min).padStart(2, '0');
+      controls.appendChild(t);
+      header.appendChild(controls);
+    }
+    group.appendChild(header);
+    section.appendChild(group);
+  });
+}
+
+// Returns the rewritten crontab content, or null when nothing changed.
+function buildCrontabContent() {
+  if (!scheduleState) return null;
+  const lines = scheduleState.lines.slice();
+  let changed = false;
+  CRON_JOBS.forEach(j => {
+    const job = scheduleState.jobs[j.id];
+    if (!job) return;
+    const t = document.getElementById('sched-' + j.id);
+    if (!t || !t.value) return;
+    const [h, m] = t.value.split(':').map(Number);
+    let dow = job.dow;
+    if (j.weekly) {
+      const sel = document.getElementById('sched-' + j.id + '-dow');
+      if (sel) dow = sel.value;
+    }
+    if (m !== job.min || h !== job.hour || String(dow) !== String(job.dow)) changed = true;
+    lines[job.idx] = m + ' ' + h + ' ' + job.dom + ' ' + job.mon + ' ' + dow + ' ' + job.rest;
+  });
+  return changed ? lines.join('\n') : null;
+}
+
+async function renderAllSettings() {
+  selectNavItem(document.getElementById('settings-all-item'));
+  currentSettingFile = '__all__';
+  scheduleState = null;
   document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('settings-textarea').style.display = 'none';
+  const formDiv = document.getElementById('settings-form');
+  formDiv.style.display = 'flex';
+  formDiv.innerHTML = '';
+  document.getElementById('settings-save-row').style.display = 'flex';
+  const status = document.getElementById('settings-status');
+  status.textContent = 'Loading...';
+
+  let envData = null, cronText = null;
+  try {
+    const [envRes, cronRes] = await Promise.all([
+      fetch('/api/settings/.env'),
+      fetch('/api/settings/crontab'),
+    ]);
+    envData = await envRes.json();
+    if (cronRes.ok) cronText = (await cronRes.json()).content || '';
+  } catch (e) {
+    status.textContent = 'Error loading settings';
+    return;
+  }
+  if (!envData || envData.error) {
+    status.textContent = 'Error loading settings: ' + ((envData && envData.error) || 'unknown');
+    return;
+  }
+
+  const envMap = new Map();
+  (envData.fields || []).forEach(f => { if (f.type === 'kv') envMap.set(f.key, f.value); });
+
+  // One card per category in fixed, task-first order, plus a sidebar
+  // quick-link per card that scrolls to it.
+  const sections = {};
+  const catList = document.getElementById('settings-cat-list');
+  catList.innerHTML = '';
+  CATEGORIES.forEach((cat, i) => {
+    const sec = document.createElement('div');
+    sec.className = 'settings-section';
+    sec.id = 'settings-cat-' + i;
+    const title = document.createElement('div');
+    title.className = 'settings-section-title';
+    title.textContent = cat.name;
+    sec.appendChild(title);
+    if (cat.blurb) {
+      const blurb = document.createElement('div');
+      blurb.className = 'settings-cat-blurb';
+      blurb.textContent = cat.blurb;
+      sec.appendChild(blurb);
+    }
+    sections[cat.name] = sec;
+    formDiv.appendChild(sec);
+
+    const nav = document.createElement('div');
+    nav.className = 'settings-subitem';
+    nav.textContent = cat.name;
+    nav.onclick = async () => {
+      if (currentSettingFile !== '__all__') await renderAllSettings();
+      const target = document.getElementById('settings-cat-' + i);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    };
+    catList.appendChild(nav);
+  });
+
+  // Provider presets: one click fills the AI endpoint fields.
+  const presetRow = document.createElement('div');
+  presetRow.style.cssText = 'display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.1rem;';
+  LLM_PRESETS.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'preset-btn';
+    b.type = 'button';
+    b.textContent = p.name;
+    b.onclick = () => {
+      const base = document.querySelector('.env-input[data-key="LLM_BASE_URL"]');
+      const model = document.querySelector('.env-input[data-key="LLM_MODEL"]');
+      const key = document.querySelector('.env-input[data-key="LLM_API_KEY"]');
+      if (base) base.value = p.base;
+      if (model) {
+        if (p.model) model.value = p.model;
+        else model.placeholder = p.modelHint || '';
+      }
+      if (key) key.focus();
+    };
+    presetRow.appendChild(b);
+  });
+  sections["AI Model"].appendChild(presetRow);
+
+  const knownKeys = new Set(Object.keys(envSchema));
+  Object.keys(envSchema).forEach(key => {
+    const s = envSchema[key];
+    const sec = sections[s.category] || sections["Advanced"];
+    if (s.subhead) {
+      const h = document.createElement('div');
+      h.className = 'settings-subhead';
+      h.textContent = s.subhead;
+      sec.appendChild(h);
+    }
+    const present = envMap.has(key);
+    sec.appendChild(makeEnvField(key, present ? envMap.get(key) : (s.default || ''), !present));
+  });
+  // Anything in .env this page doesn't know still shows up, under Advanced,
+  // so no setting is ever reachable only by hand-editing the file.
+  envMap.forEach((value, key) => {
+    if (!knownKeys.has(key)) sections["Advanced"].appendChild(makeEnvField(key, value, false));
+  });
+
+  if (cronText !== null) {
+    buildScheduleCard(sections["Schedule"], cronText);
+  } else {
+    const err = document.createElement('div');
+    err.className = 'form-comment';
+    err.textContent = "Couldn't load the schedule file — edit it under Advanced instead.";
+    sections["Schedule"].appendChild(err);
+  }
+
+  status.textContent = '';
+}
+
+async function loadSetting(filename, el) {
+  selectNavItem(el);
+  currentSettingFile = filename;
+  scheduleState = null;
+  document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('settings-form').style.display = 'none';
   document.getElementById('settings-save-row').style.display = 'flex';
   const status = document.getElementById('settings-status');
   const txtArea = document.getElementById('settings-textarea');
-  const formDiv = document.getElementById('settings-form');
   status.textContent = 'Loading...';
   try {
     const res = await fetch('/api/settings/' + filename);
     const data = await res.json();
-    if (data.type === 'env') {
-      txtArea.style.display = 'none';
-      formDiv.style.display = 'flex';
-      formDiv.innerHTML = '';
-      
-      const sections = {};
-      const getSection = (name) => {
-        if (!sections[name]) {
-          const sec = document.createElement('div');
-          sec.className = 'settings-section';
-          const title = document.createElement('div');
-          title.className = 'settings-section-title';
-          title.textContent = name;
-          sec.appendChild(title);
-          sections[name] = sec;
-          formDiv.appendChild(sec);
-        }
-        return sections[name];
-      };
-
-      const renderEnvField = (key, value, synthetic) => {
-           const schema = envSchema[key] || { label: key, category: "Advanced Settings", type: "text", desc: "" };
-           const sec = getSection(schema.category);
-
-           const group = document.createElement('div');
-           group.className = 'form-group';
-           
-           const header = document.createElement('div');
-           header.className = 'form-header';
-           
-           const infoDiv = document.createElement('div');
-           const label = document.createElement('label');
-           label.className = 'form-label';
-           label.textContent = schema.label;
-           infoDiv.appendChild(label);
-           
-           if (schema.desc) {
-             const desc = document.createElement('div');
-             desc.className = 'form-comment';
-             desc.textContent = schema.desc;
-             infoDiv.appendChild(desc);
-           }
-           header.appendChild(infoDiv);
-           
-           let input;
-           if (schema.type === 'toggle') {
-             const switchDiv = document.createElement('label');
-             switchDiv.className = 'switch';
-             input = document.createElement('input');
-             input.type = 'checkbox';
-             input.className = 'env-input';
-             input.dataset.key = key;
-             input.checked = value === '1' || value.toLowerCase() === 'true';
-             const slider = document.createElement('span');
-             slider.className = 'slider';
-             switchDiv.appendChild(input);
-             switchDiv.appendChild(slider);
-             header.appendChild(switchDiv);
-           } else if (schema.type === 'select') {
-             input = document.createElement('select');
-             input.className = 'form-select env-input';
-             input.dataset.key = key;
-             input.style.width = '200px';
-             schema.options.forEach(opt => {
-               const o = document.createElement('option');
-               o.value = opt;
-               o.textContent = opt;
-               if (value === opt) o.selected = true;
-               input.appendChild(o);
-             });
-             header.appendChild(input);
-           } else {
-             input = document.createElement('input');
-             input.type = schema.type || 'text';
-             input.className = 'form-input env-input';
-             input.dataset.key = key;
-             input.value = value;
-             input.style.flex = '1';
-             input.style.maxWidth = '300px';
-             header.appendChild(input);
-           }
-           if (synthetic) {
-             // Not present in .env yet; the save handler only writes it once the
-             // user actually changes it from the built-in default.
-             input.dataset.synthetic = '1';
-             input.dataset.default = value;
-           }
-
-           group.appendChild(header);
-           sec.appendChild(group);
-      };
-
-      const presentKeys = new Set();
-      data.fields.forEach(f => {
-        if (f.type === 'kv') {
-          presentKeys.add(f.key);
-          renderEnvField(f.key, f.value, false);
-        }
-      });
-
-      // Settings that ship commented-out in .env (so they never arrive as kv
-      // fields) but have a known default: render them too, so they can be
-      // discovered and edited from here.
-      Object.keys(envSchema).forEach(key => {
-        if (!presentKeys.has(key) && envSchema[key].default !== undefined) {
-          renderEnvField(key, envSchema[key].default, true);
-        }
-      });
-      
-      // Move Advanced Settings to the end
-      if (sections["Advanced Settings"]) {
-        formDiv.appendChild(sections["Advanced Settings"]);
-      }
-    } else {
-      formDiv.style.display = 'none';
-      txtArea.style.display = 'block';
-      txtArea.value = data.content || '';
-    }
-    status.textContent = '';
+    txtArea.style.display = 'block';
+    txtArea.value = data.content || '';
+    status.textContent = data.error ? ('Error: ' + data.error) : '';
   } catch (e) {
     status.textContent = 'Error loading file';
   }
@@ -1659,8 +1923,8 @@ document.getElementById('settings-save').onclick = async () => {
   const status = document.getElementById('settings-status');
   status.textContent = 'Saving...';
   try {
-    let payload = {};
-    if (currentSettingFile === '.env') {
+    let needsRestart = false;
+    if (currentSettingFile === '__all__') {
       const updates = {};
       document.querySelectorAll('.env-input').forEach(inp => {
         const val = inp.type === 'checkbox' ? (inp.checked ? '1' : '0') : inp.value;
@@ -1675,38 +1939,46 @@ document.getElementById('settings-save').onclick = async () => {
         }
         updates[inp.dataset.key] = val;
       });
-      payload = { updates };
-    } else {
-      payload = { content: document.getElementById('settings-textarea').value };
-    }
-    
-    const res = await fetch('/api/settings/' + currentSettingFile, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    
-    if (res.ok) {
-      status.textContent = 'Saved!';
-      setTimeout(() => { if(status.textContent === 'Saved!') status.textContent = ''; }, 2000);
-      
-      if (currentSettingFile === '.env') {
-        if (confirm("A restart is required to apply changes to .env. Restart now?")) {
-           status.textContent = 'Restarting...';
-           const rres = await fetch('/api/system/restart', {method: 'POST'});
-           if (rres.ok) {
-             status.textContent = 'Restart initiated. You may need to refresh the page.';
-           } else {
-             status.textContent = 'Failed to restart.';
-           }
-        }
+      const res = await fetch('/api/settings/.env', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ updates })
+      });
+      if (!res.ok) throw new Error('saving settings failed');
+
+      const cronContent = buildCrontabContent();
+      if (cronContent !== null) {
+        const cres = await fetch('/api/settings/crontab', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: cronContent })
+        });
+        if (!cres.ok) throw new Error('saving schedule failed');
       }
+      needsRestart = true;
     } else {
-      status.textContent = 'Error saving';
+      const res = await fetch('/api/settings/' + currentSettingFile, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: document.getElementById('settings-textarea').value })
+      });
+      if (!res.ok) throw new Error('saving failed');
+      // Prompt/proposal edits are read fresh on the next run - no restart.
+      needsRestart = currentSettingFile === 'crontab';
+    }
+
+    status.textContent = 'Saved!';
+    setTimeout(() => { if (status.textContent === 'Saved!') status.textContent = ''; }, 2000);
+
+    if (needsRestart && confirm('Saved. A restart is required for the changes to take effect. Restart now?')) {
+      status.textContent = 'Restarting...';
+      const rres = await fetch('/api/system/restart', { method: 'POST' });
+      status.textContent = rres.ok
+        ? 'Restart initiated. Give it a few seconds, then refresh the page.'
+        : 'Failed to restart.';
     }
   } catch (e) {
-    status.textContent = 'Error saving';
-    status.style.color = '#e74c3c';
+    status.textContent = 'Error: ' + e.message;
   }
 };
 

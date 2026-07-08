@@ -35,6 +35,17 @@ services:
       # Isolated vault, managed by the standalone obsidian container above.
       - obsidian_only_vault:/vault
       - ./data:/work
+      # The crontab and prompts are baked into the image at build time; these
+      # bind-mounts overlay the live host copies so edits from the settings
+      # page actually apply (prompts on the next run, crontab after a restart)
+      # instead of waiting for the next image rebuild.
+      - ./crontab:/app/crontab:ro
+      - ./prompt_template.txt:/app/prompt_template.txt:ro
+      - ./prompt_dry_run.txt:/app/prompt_dry_run.txt:ro
+      - ./prompt_personal_email.txt:/app/prompt_personal_email.txt:ro
+      - ./prompt_personal_email_dry_run.txt:/app/prompt_personal_email_dry_run.txt:ro
+      - ./prompt_vault_profile.txt:/app/prompt_vault_profile.txt:ro
+      - ./prompt_weekly_rollup.txt:/app/prompt_weekly_rollup.txt:ro
     restart: unless-stopped
 
   # NotebookLM-style chat over the vault (read-only). Reuses the pipeline image -
@@ -60,6 +71,10 @@ services:
       - ./:/host
       # Mount the docker socket so vault-qa can issue container restarts
       - /var/run/docker.sock:/var/run/docker.sock
+      # The simulator runs the agent in this container against /app prompts;
+      # overlay the live host copies (same rationale as the pipeline mounts).
+      - ./prompt_dry_run.txt:/app/prompt_dry_run.txt:ro
+      - ./prompt_personal_email_dry_run.txt:/app/prompt_personal_email_dry_run.txt:ro
     ports:
       - "8420:8420"
     restart: unless-stopped
