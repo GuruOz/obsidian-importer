@@ -118,6 +118,13 @@ def main():
         if status in ("skipped_duplicate", "no_content"):
             print(f"skip (no-op run, nothing to log): {run_date} [{status}]")
             continue
+        if status == "proposed":
+            # A dry-run log ("proposed"/"skipped_duplicate"/"no_content" per
+            # prompt_dry_run.txt) never touched the vault - run-ingest.sh only
+            # ever calls filing_report.py --vault-log on the live path, so a
+            # dry run must never gain a Filing Log line here either.
+            print(f"skip (dry-run log, vault untouched): {run_date} [{status}]")
+            continue
         print(f"backfill: {run_date} [{status}]")
         to_write.append(build_line(result, run_date))
 
