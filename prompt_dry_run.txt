@@ -36,7 +36,8 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    manual single-day backfill - use it exactly for the whole batch.
 5. Idempotency, per section: for a DIGEST section check whether
    <!-- copilot-digest:<that-section's-work-date> --> already exists in that date's
-   daily note; for an AD-HOC NOTE section check for <!-- work-note:<its-Message-ID> -->
+   daily note; for an AD-HOC NOTE section check for <!-- work-note:ITS-MESSAGE-ID -->
+   (the Message-ID exactly as given, WITHOUT its surrounding < > angle brackets)
    instead (ad-hoc notes are keyed per message, NOT per date - a date's existing
    copilot-digest marker never blocks one). Note in your proposal whether each
    section would be a no-op duplicate.

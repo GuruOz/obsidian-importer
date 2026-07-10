@@ -42,7 +42,8 @@ FILING (for each email you decided to FILE):
    any date you write, and compute weekdays from the date itself, anchored to the DATE
    CONTEXT above - never guess a weekday.
 5. IDEMPOTENCY: before filing an email, check whether a marker
-   <!-- personal-email:<Message-ID> --> already exists in that date's daily note. If it
+   <!-- personal-email:MESSAGE-ID --> (the Message-ID exactly as given, WITHOUT its
+   surrounding < > angle brackets) already exists in that date's daily note. If it
    does, treat the email as already filed and skip it (count it under skipped with
    reason "already filed"). Otherwise, append the marker on its own line together with
    the entry you file, so a re-run never double-files the same email.

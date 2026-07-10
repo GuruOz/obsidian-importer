@@ -58,11 +58,20 @@ def digest_work_dates(staging_dir):
     return dates
 
 
+def _strip_id_brackets(mid):
+    """RFC5322 Message-IDs arrive as '<foo@bar>'; strip the angle brackets so
+    marker comparisons are bracket-agnostic regardless of whether the agent
+    kept them (nesting '<...>' inside an HTML comment reads oddly, so it
+    usually doesn't)."""
+    return mid.strip().lstrip("<").rstrip(">")
+
+
 def staged_note_ids(staging_dir):
-    """Message-IDs of ad-hoc note sections in the staged batch. Only those
-    sections carry a 'Message-ID:' header line (fetch_digest.message_to_markdown)."""
+    """Message-IDs of ad-hoc note sections in the staged batch (brackets
+    stripped). Only those sections carry a 'Message-ID:' header line
+    (fetch_digest.message_to_markdown)."""
     text = _read(os.path.join(staging_dir, "digest.md"))
-    return re.findall(r"(?m)^Message-ID:\s*(\S+)", text)
+    return [_strip_id_brackets(m) for m in re.findall(r"(?m)^Message-ID:\s*(\S+)", text)]
 
 
 def has_digest_section(staging_dir):
@@ -147,20 +156,25 @@ def check_markers(source, status, work_dates, staging_dir, vault_dir, warn):
             marker = f"<!-- copilot-digest:{work_date} -->"
             if not any(marker in _read(m) for m in matches):
                 warn(f"idempotency marker {marker} not found in the {work_date} daily note")
-        # Ad-hoc note sections are keyed per message, not per date.
+        # Ad-hoc note sections are keyed per message, not per date. Bracket-
+        # agnostic: match whether the agent kept the ID's '<...>' or not.
         note_ids = staged_note_ids(staging_dir)
         if note_ids:
             haystack = _daily_notes_text(vault_dir)
             for mid in note_ids:
-                if f"<!-- work-note:{mid} -->" not in haystack:
+                if (f"<!-- work-note:{mid} -->" not in haystack
+                        and f"<!-- work-note:<{mid}> -->" not in haystack):
                     warn(f"ad-hoc note {mid} left no work-note marker in any daily note "
                          "(filing may have silently failed)")
     else:  # personal: each pending message id should have left a marker somewhere
-        pending = _read(os.path.join(staging_dir, "pending_ids.txt")).split()
+        pending = [_strip_id_brackets(m) for m in
+                   _read(os.path.join(staging_dir, "pending_ids.txt")).split()]
         if not pending:
             return
         haystack = _daily_notes_text(vault_dir)
-        missing = [mid for mid in pending if f"<!-- personal-email:{mid} -->" not in haystack]
+        missing = [mid for mid in pending
+                   if f"<!-- personal-email:{mid} -->" not in haystack
+                   and f"<!-- personal-email:<{mid}> -->" not in haystack]
         # Some pending ids are legitimately skipped as noise; only flag when a
         # large share left no marker, which points at silent drops rather than
         # deliberate triage.
@@ -337,12 +351,11 @@ def main():
     # back to the report if real digest content failed to parse a date. A
     # batch that is entirely ad-hoc notes has no digest section at all, so no
     # date should be marker-checked for it.
-    if os.environ.get("WORK_DATE"):
-        digest_dates = [os.environ["WORK_DATE"]]
-    elif args.source == "digest":
-        digest_dates = digest_work_dates(args.staging_dir)
-        if not digest_dates and has_digest_section(args.staging_dir):
-            digest_dates = reported
+    if args.source == "digest" and has_digest_section(args.staging_dir):
+        if os.environ.get("WORK_DATE"):
+            digest_dates = [os.environ["WORK_DATE"]]
+        else:
+            digest_dates = digest_work_dates(args.staging_dir) or reported
     else:
         digest_dates = []
 

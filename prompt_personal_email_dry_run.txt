@@ -33,7 +33,8 @@ PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed
 4. For each email you would FILE: determine its DATE from the Received header, and
    decide exactly where it would be filed - which date's daily note (created if absent)
    and which topic/project note (existing UPDATE or new CREATE, with an idempotency
-   marker <!-- personal-email:<Message-ID> --> and `[[links]]` to related notes). Use
+   marker <!-- personal-email:MESSAGE-ID --> (the Message-ID exactly as given, WITHOUT
+   its surrounding < > angle brackets) and `[[links]]` to related notes). Use
    the YYYY-MM-DD (MMM) date format; compute weekdays from the date itself, anchored to
    the DATE CONTEXT above.
    - **DATA PRESERVATION RULE (LOSSLESS)**: For emails you would file, preserve substantive details - specific identifiers (booking references, amounts, dates, ticket/order numbers), names, exact quotes, concrete action items. Only omit true noise (signatures, tracking footers, boilerplate).

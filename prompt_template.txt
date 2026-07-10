@@ -38,9 +38,10 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
      already exists in that date's daily note. If it does, skip that section (report
      it in your summary) but still process the other sections. Otherwise, add the
      marker as part of this run.
-   - AD-HOC NOTE section: check whether <!-- work-note:<its-Message-ID> --> already
-     exists in that date's daily note; if so skip the section, otherwise append that
-     marker together with the entry you file. Ad-hoc notes are keyed per message,
+   - AD-HOC NOTE section: check whether <!-- work-note:ITS-MESSAGE-ID --> already
+     exists in that date's daily note (use the Message-ID exactly as given, WITHOUT
+     its surrounding < > angle brackets); if so skip the section, otherwise append
+     that marker together with the entry you file. Ad-hoc notes are keyed per message,
      NOT per date: an existing copilot-digest marker for the date never blocks an
      ad-hoc note, and an ad-hoc note never adds a copilot-digest marker.
 6. PLAN BEFORE WRITING: before you write to any vault file, write a filing plan to
