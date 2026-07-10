@@ -23,7 +23,7 @@ from graph_mail import (
 )
 
 
-def message_to_markdown(message):
+def message_to_markdown(message, kind="digest"):
     body = message.get("body", {})
     content = body.get("content", "")
     content_type = body.get("contentType", "text")
@@ -34,6 +34,15 @@ def message_to_markdown(message):
         body_md = content.strip()
 
     received = message.get("receivedDateTime", "")
+    if kind == "note":
+        # Ad-hoc work notes are idempotency-keyed per message (a date's digest
+        # marker must not block them), so the agent needs the Message-ID; the
+        # subject gives it filing context a free-form body may lack.
+        subject = message.get("subject", "") or ""
+        mid = message.get("internetMessageId", "") or ""
+        return (f"## Ad-hoc note received {received}\n"
+                f"Subject: {subject}\n"
+                f"Message-ID: {mid}\n\n{body_md}\n")
     return f"## Digest received {received}\n\n{body_md}\n"
 
 
@@ -42,13 +51,17 @@ def main():
     ledger_file = env("LEDGER_FILE", "/work/processed_ids.txt", required=True)
     digest_from = env("DIGEST_FROM", required=True)
     subject_pattern = env("DIGEST_SUBJECT_PATTERN", required=True)
+    # Second subject class from the same sender: ad-hoc work notes the user
+    # emails themselves. Blank disables them.
+    note_pattern = env("DIGEST_NOTE_SUBJECT_PATTERN", "obsidian note")
     digest_folder = env("DIGEST_FOLDER", "Inbox")
 
     os.makedirs(staging_dir, exist_ok=True)
     os.makedirs(os.path.join(staging_dir, "archive"), exist_ok=True)
 
     print(f"fetch_digest: folder={digest_folder!r} from={digest_from!r} "
-          f"subject_pattern={subject_pattern!r} staging={staging_dir}")
+          f"subject_pattern={subject_pattern!r} note_pattern={note_pattern!r} "
+          f"staging={staging_dir}")
     token = get_access_token()
     ledger = load_ledger(ledger_file)
     print(f"fetch_digest: ledger holds {len(ledger)} already-processed message id(s)")
@@ -70,6 +83,7 @@ def main():
 
     print(f"fetch_digest: listed {len(messages)} most-recent message(s) in folder")
     subject_re = re.compile(subject_pattern, re.IGNORECASE)
+    note_re = re.compile(note_pattern, re.IGNORECASE) if note_pattern else None
     matches = []
     for msg in messages:
         from_addr = (msg.get("from", {}) or {}).get("emailAddress", {}).get("address", "")
@@ -78,13 +92,18 @@ def main():
         if from_addr.lower() != digest_from.lower():
             print(f"fetch_digest:   skip (wrong sender {from_addr}) [{received}] {subject!r}")
             continue
-        if not subject_re.search(subject):
+        if subject_re.search(subject):
+            kind = "digest"
+        elif note_re and note_re.search(subject):
+            kind = "note"
+        else:
             print(f"fetch_digest:   skip (subject mismatch) [{received}] {subject!r}")
             continue
         if msg.get("internetMessageId") in ledger:
             print(f"fetch_digest:   skip (already processed) [{received}] {subject!r}")
             continue
-        print(f"fetch_digest:   match [{received}] {subject!r}")
+        print(f"fetch_digest:   match ({kind}) [{received}] {subject!r}")
+        msg["_kind"] = kind
         matches.append(msg)
 
     if not matches:
@@ -98,7 +117,7 @@ def main():
         full = graph_get(token, f"/me/messages/{msg['id']}", params={"$select": "body"})
         msg["body"] = full.get("body", {})
 
-    sections = [message_to_markdown(m) for m in matches]
+    sections = [message_to_markdown(m, m.get("_kind", "digest")) for m in matches]
     combined = "\n---\n\n".join(sections)
 
     digest_path = os.path.join(staging_dir, "digest.md")

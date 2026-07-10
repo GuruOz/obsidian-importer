@@ -58,6 +58,13 @@ def digest_work_dates(staging_dir):
     return dates
 
 
+def staged_note_ids(staging_dir):
+    """Message-IDs of ad-hoc note sections in the staged batch. Only those
+    sections carry a 'Message-ID:' header line (fetch_digest.message_to_markdown)."""
+    text = _read(os.path.join(staging_dir, "digest.md"))
+    return re.findall(r"(?m)^Message-ID:\s*(\S+)", text)
+
+
 def _norm_title(s):
     """Normalize a note title for fuzzy matching: casefold, treat spaces,
     underscores and hyphens as one separator, drop other punctuation."""
@@ -133,6 +140,14 @@ def check_markers(source, status, work_dates, staging_dir, vault_dir, warn):
             marker = f"<!-- copilot-digest:{work_date} -->"
             if not any(marker in _read(m) for m in matches):
                 warn(f"idempotency marker {marker} not found in the {work_date} daily note")
+        # Ad-hoc note sections are keyed per message, not per date.
+        note_ids = staged_note_ids(staging_dir)
+        if note_ids:
+            haystack = _daily_notes_text(vault_dir)
+            for mid in note_ids:
+                if f"<!-- work-note:{mid} -->" not in haystack:
+                    warn(f"ad-hoc note {mid} left no work-note marker in any daily note "
+                         "(filing may have silently failed)")
     else:  # personal: each pending message id should have left a marker somewhere
         pending = _read(os.path.join(staging_dir, "pending_ids.txt")).split()
         if not pending:

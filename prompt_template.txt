@@ -2,7 +2,10 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
 
 {{DATE_CONTEXT}}
 
-1. Read the staged digest at /work/staging/digest.md.
+1. Read the staged batch at /work/staging/digest.md. It contains two kinds of
+   sections (separated by "---"): "## Digest received <timestamp>" (a Work Log
+   daily summary) and "## Ad-hoc note received <timestamp>" (a free-form work
+   note the user emailed themselves, with Subject: and Message-ID: header lines).
 2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
    the file exists - it documents the concrete folder taxonomy, daily-note format, tag
    vocabulary, linking style, and create-vs-update rule.
@@ -18,27 +21,37 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
      workstream when its title doesn't match the digest wording - at most one call per
      workstream. Use grep_search only for exact identifiers (ticket numbers). Do NOT run
      broad vault-wide greps otherwise - the index already gives complete title coverage.
-4. Determine each section's WORK DATE. The staged digest may contain MORE THAN ONE
-   digest email (sections separated by "---", each headed "## Digest received
-   <timestamp>") and they may describe DIFFERENT days - e.g. yesterday's summary sent
-   late plus today's. For each section, read its own stated date (a "Work Log -
+4. Determine each section's WORK DATE. The staged batch may contain MORE THAN ONE
+   email and they may describe DIFFERENT days - e.g. yesterday's summary sent late
+   plus today's. For each DIGEST section, read its own stated date (a "Work Log -
    <DD Mon YYYY>" style line in the body; if absent, fall back to that section's
-   "Digest received" timestamp converted to local Singapore time). File each section's
-   content under ITS OWN date's daily note - creating it if absent - with its own
-   idempotency marker. Never merge two sections with different stated dates under one
-   date, and do not use today's date if a section's work date differs from it.
-   Exception: if the DATE CONTEXT above specifies an explicit work date, it is a
+   "Digest received" timestamp converted to local Singapore time). For each AD-HOC
+   NOTE section, use a date clearly stated in the note body if there is one,
+   otherwise its "received" timestamp converted to local Singapore time. File each
+   section's content under ITS OWN date's daily note - creating it if absent - with
+   its own idempotency marker. Never merge two sections with different stated dates
+   under one date, and do not use today's date if a section's work date differs from
+   it. Exception: if the DATE CONTEXT above specifies an explicit work date, it is a
    manual single-day backfill - use it exactly for the whole batch.
-5. Before writing anything for a section, check whether
-   <!-- copilot-digest:<that-section's-work-date> --> already exists in that date's
-   daily note. If it does, skip that section (report it in your summary) but still
-   process the other sections. Otherwise, add the marker as part of this run.
+5. Idempotency, checked per section before writing anything for it:
+   - DIGEST section: check whether <!-- copilot-digest:<that-section's-work-date> -->
+     already exists in that date's daily note. If it does, skip that section (report
+     it in your summary) but still process the other sections. Otherwise, add the
+     marker as part of this run.
+   - AD-HOC NOTE section: check whether <!-- work-note:<its-Message-ID> --> already
+     exists in that date's daily note; if so skip the section, otherwise append that
+     marker together with the entry you file. Ad-hoc notes are keyed per message,
+     NOT per date: an existing copilot-digest marker for the date never blocks an
+     ad-hoc note, and an ad-hoc note never adds a copilot-digest marker.
 6. PLAN BEFORE WRITING: before you write to any vault file, write a filing plan to
    /work/staging/plan.md - one line per digest workstream/section: the target note path,
    CREATE or UPDATE, and a one-line reason. Only then execute the plan. If execution has
    to deviate, update plan.md so it always reflects what you actually did.
-7. Split the digest into atomic entries (one discrete task/outcome/decision per entry)
-   and append each under the correct daily-note heading.
+7. Split each DIGEST section into atomic entries (one discrete task/outcome/decision
+   per entry) and append each under the correct daily-note heading. An AD-HOC NOTE
+   section is NOT force-split into workstreams: file it as its content dictates -
+   typically one daily-note entry plus zero or more topic-note updates - applying
+   all the same rules below.
    - **DATA PRESERVATION RULE (LOSSLESS)**: Do not summarize, compress, or omit operational details. Preserve all specific identifiers (ticket numbers like CS... or TrackingID...), names of individuals, exact quotes, and specific action items/options from the source digest. Only omit true noise (email signatures, contact details, confidentiality disclaimers). Do not alter acronyms or department names (e.g. preserve "ITD / IFNRA" exactly as written).
    - **CHRONOLOGICAL RULE**: When writing any date with a weekday, compute the weekday from the work date itself, anchored to the DATE CONTEXT above (you know today's date and weekday from it - count backward/forward). Never guess a weekday; a wrong weekday next to a correct date is worse than no weekday.
 8. For entries that belong in a topic/project note, update the existing note (found via
