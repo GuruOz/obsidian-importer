@@ -52,9 +52,10 @@
   .settings-section-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem; color: #fff; padding-bottom: 0.5rem; border-bottom: 1px solid #333; }
   .form-group { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 1.25rem; }
   .form-group:last-child { margin-bottom: 0; }
-  .form-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .form-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  .form-info { flex: 1 1 220px; min-width: 200px; }
   .form-label { font-weight: 500; font-size: 0.95rem; color: #eee; }
-  .form-input, .form-select { padding: 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-family: inherit; font-size: 0.9rem; transition: border-color 0.2s; width: 100%; }
+  .form-input, .form-select { padding: 0.6rem; border-radius: 8px; border: 1px solid #444; background: #1a1a1a; color: #eee; font-family: inherit; font-size: 0.9rem; transition: border-color 0.2s; width: 100%; min-width: 160px; }
   .form-input:focus, .form-select:focus { outline: none; border-color: #2b5797; }
   .form-comment { font-size: 0.85rem; color: #888; margin-top: 0.25rem; }
   
@@ -1672,6 +1673,7 @@ function makeEnvField(key, value, synthetic) {
   header.className = 'form-header';
 
   const infoDiv = document.createElement('div');
+  infoDiv.className = 'form-info';
   const label = document.createElement('label');
   label.className = 'form-label';
   label.textContent = schema.label;
@@ -1720,6 +1722,7 @@ function makeEnvField(key, value, synthetic) {
     input.value = value;
     input.style.flex = '1';
     input.style.maxWidth = '300px';
+    input.style.minWidth = '160px';
     header.appendChild(input);
   }
   if (synthetic) {
