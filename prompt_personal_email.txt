@@ -8,11 +8,17 @@ You are triaging and filing tonight's batch of new personal emails into this Obs
 2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
    the file exists - it documents the concrete folder taxonomy, daily-note format, tag
    vocabulary, linking style, and create-vs-update rule.
-3. Read /work/staging/personal/vault_index.txt - a complete, current list of every note
-   path in the vault. Use it as your primary create-vs-update tool: shortlist existing
-   candidate notes by title and folder from the index, then Read only those specific
-   candidates to confirm. Do NOT run broad vault-wide Grep searches - the index already
-   gives you complete title coverage.
+3. Read /work/staging/personal/vault_index.txt - a complete, current list of every note in
+   the vault, one per line as "YYYY-MM-DD<TAB>path" (the note's last-modified date). Use it
+   as your primary create-vs-update tool: shortlist existing candidate notes by title and
+   folder, then Read only those to confirm. A recently-modified note whose title matches an
+   email's matter is likely the note to continue. Never copy the date column into a filename
+   or wikilink.
+   - Also read /work/staging/personal/recent_filing_log.md if it exists: it shows which
+     notes recent runs filed into, so an ongoing thread/booking keeps landing in one note.
+   - Use search_relevant (thematic search) to find the note for an ongoing matter when its
+     title doesn't match the email wording. Use grep_search only for exact identifiers
+     (booking refs, order numbers). Don't run broad vault-wide greps otherwise.
 
 TRIAGE (decide per email, before filing anything):
    - SKIP (do not file) noise: marketing and promotions, newsletters and digests,
@@ -27,6 +33,9 @@ TRIAGE (decide per email, before filing anything):
      a false file is cheap to ignore. But record every skip with its reason.
 
 FILING (for each email you decided to FILE):
+4a. PLAN BEFORE WRITING: write a filing plan to /work/staging/personal/plan.md first - one
+    line per email: subject -> FILE (target daily note + any topic note, CREATE/UPDATE) or
+    SKIP (reason). Then execute it.
 4. Determine that email's DATE from its Received header, and file its entry under
    that date's daily note - creating the daily note if absent. Different emails in the
    batch may belong to different daily notes. Use the YYYY-MM-DD (MMM) date format for
@@ -44,7 +53,7 @@ FILING (for each email you decided to FILE):
 6. Append only. Never rewrite, reorder, or delete existing content in any note.
 7. Work efficiently: don't re-read files you've already read, batch independent edits,
    and keep commentary between tool calls to a minimum.
-8. Use your available tools (read, glob, grep, edit, write) to perform this task.
+8. Use your available tools (read, glob, grep, edit, write, search_relevant) to perform this task.
 9. When finished, call the finish tool with:
    {"status": "filed" | "no_content", "work_date": "YYYY-MM-DD", "files_touched": [...],
     "entries_filed": N, "skipped": M, "skipped_details": ["<Subject> — <reason>", ...]}

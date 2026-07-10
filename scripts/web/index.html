@@ -152,6 +152,8 @@
   .source-chip:hover { background: #454545; }
   sup.cite { cursor: pointer; color: #8ab4f8; font-size: 0.75em; user-select: none; }
   sup.cite:hover { text-decoration: underline; }
+  sup.cite-unverified { color: #e0a53f; }
+  .cite-warn { margin-top: 0.3rem; color: #e0a53f; font-size: 0.82rem; }
   .cite-panel { margin-top: 0.5rem; padding: 0.45rem 0.7rem; border-left: 3px solid #2b5797;
                 background: #262626; border-radius: 6px; font-size: 0.83rem; }
   .cite-title { font-weight: 600; }
@@ -250,6 +252,8 @@
     .msg.error { background: #fbdede; }
     .source-chip { background: #e4e4e4; color: #245; border-color: #ccc; }
     sup.cite { color: #1a56b0; }
+    sup.cite-unverified { color: #b8791a; }
+    .cite-warn { color: #b8791a; }
     .cite-panel { background: #f0f0f0; border-left-color: #1a56b0; }
     .cite-title a { color: #1a56b0; }
     .cite-snip { color: #555; }
@@ -330,14 +334,22 @@
     <div id="settings-form" style="display:none; flex:1; flex-direction:column; max-width: 800px;"></div>
     <div id="ingest-panel" style="display:none; flex:1; flex-direction:column; max-width: 800px; min-height: 0;">
       <div class="settings-section">
-        <div class="settings-section-title">Personal Email Ingestion</div>
-        <p class="form-comment" style="margin-top: 0;">
-          Runs <code>run-ingest.sh personal</code> in the pipeline container right now, instead of
-          waiting for the nightly 22:30 cron run. To backfill older mail either set a lookback
-          (rewinds the watermark, never forward) or an explicit start/end date window (ignores
-          the watermark entirely and leaves it untouched). Already-processed emails are never
-          re-filed either way.
-        </p>
+        <div class="settings-section-title" id="ingest-title">Run Ingestion</div>
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label">Source</label>
+              <div class="form-comment">Which mailbox to ingest right now, instead of waiting for the nightly cron run.</div>
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+              <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="personal" checked> Personal Email</label>
+              <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="digest"> Work Digest</label>
+            </div>
+          </div>
+        </div>
+        <p class="form-comment" id="ingest-desc" style="margin-top: 0;"></p>
+
+        <div id="ingest-opts-personal">
         <div class="form-group">
           <div class="form-header">
             <div>
@@ -368,19 +380,33 @@
         <div class="form-group">
           <div class="form-header">
             <div>
-              <label class="form-label">Dry run</label>
-              <div class="form-comment">Propose only (staging/personal/proposed.md), don't write to the vault. Dry runs leave the ledger and watermark untouched, so nothing is marked as processed - a later live run picks up the same emails. Single pass only (drain has no effect).</div>
-            </div>
-            <label class="switch"><input id="ingest-dry-run" type="checkbox" checked><span class="slider"></span></label>
-          </div>
-        </div>
-        <div class="form-group">
-          <div class="form-header">
-            <div>
               <label class="form-label">Drain backlog</label>
               <div class="form-comment">Each pass handles up to 25 emails; repeat passes until nothing new remains (capped at 20 passes).</div>
             </div>
             <label class="switch"><input id="ingest-drain" type="checkbox" checked><span class="slider"></span></label>
+          </div>
+        </div>
+        </div>
+
+        <div id="ingest-opts-digest" style="display:none;">
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label" for="ingest-work-date">Work date (optional)</label>
+              <div class="form-comment">Backfill a specific day: forces the filing date and the idempotency marker. Leave empty to let the agent infer the date from the digest. Note: only affects an in-flight batch — a digest already recorded in the ledger is not re-fetched.</div>
+            </div>
+            <input id="ingest-work-date" class="form-input" type="date" style="width: 160px;">
+          </div>
+        </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-header">
+            <div>
+              <label class="form-label">Dry run</label>
+              <div class="form-comment" id="ingest-dry-comment">Propose only (staging/proposed.md), don't write to the vault.</div>
+            </div>
+            <label class="switch"><input id="ingest-dry-run" type="checkbox" checked><span class="slider"></span></label>
           </div>
         </div>
         <div style="display: flex; gap: 1rem; align-items: center; margin-top: 0.5rem;">
@@ -1105,10 +1131,11 @@ function addProgress(text) {
   return div;
 }
 
-function markCitations(root, count) {
+function markCitations(root, cites) {
   // Turn [n] tokens (1 <= n <= count) in the rendered answer into clickable
   // citation markers. DOM post-pass so the string-based markdown engine stays
   // untouched; PRE/CODE subtrees are skipped so code samples keep literal [n].
+  const count = cites.length;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (n) => n.parentElement.closest("pre, code")
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
@@ -1127,10 +1154,14 @@ function markCitations(root, count) {
       if (num < 1 || num > count) continue;   // not a citation: leave as text
       frag.appendChild(document.createTextNode(t.nodeValue.slice(last, m.index)));
       const sup = document.createElement("sup");
-      sup.className = "cite";
+      const c = cites[num - 1];
+      const unverified = c && c.verified === false;
+      sup.className = "cite" + (unverified ? " cite-unverified" : "");
       sup.dataset.n = num;
-      sup.title = "Show citation";
-      sup.textContent = "[" + num + "]";
+      sup.title = unverified
+        ? "Citation — this exact text couldn't be located in the note"
+        : "Show citation";
+      sup.textContent = "[" + num + "]" + (unverified ? "⚠" : "");
       frag.appendChild(sup);
       last = m.index + m[0].length;
     }
@@ -1169,6 +1200,12 @@ function toggleCitePanel(marker) {
     snip.textContent = "“" + c.snippet + "”";
     panel.appendChild(snip);
   }
+  if (c.verified === false) {
+    const warn = document.createElement("div");
+    warn.className = "cite-warn";
+    warn.textContent = "⚠ This exact text couldn't be located in the note — the citation may be paraphrased or approximate.";
+    panel.appendChild(warn);
+  }
   // Right below the answer text, above the sources/meta/feedback footer rows.
   msg.insertBefore(panel, msg.querySelector(".sources, .msg-meta, .fb-row"));
 }
@@ -1189,7 +1226,7 @@ function addAnswer(payload) {
   if (citations.length) {
     div.dataset.cs = CITE_STORE.length;
     CITE_STORE.push(citations);
-    markCitations(div, citations.length);
+    markCitations(div, citations);
   }
 
   const mi = MSG_STORE.length;
@@ -1565,9 +1602,11 @@ const envSchema = {
   "DIGEST_SUBJECT_PATTERN": { label: "Subject filter (optional)", category: "Work Digest", type: "text", default: "", desc: "Only subjects matching this pattern count. Leave blank to accept any subject from the sender." },
   "DIGEST_FOLDER": { label: "Mail folder", category: "Work Digest", type: "text", default: "Inbox/CopilotDigest", desc: "The Outlook folder the digest lands in. Use \"Inbox\" if you don't have a rule moving digests into a folder." },
   "DRY_RUN": { label: "Dry run — propose only", category: "Work Digest", type: "toggle", default: "1", desc: "When on, the digest job writes its filing plan to a proposal (see Review Proposals on the left) instead of changing the vault. Turn off to file for real." },
+  "DIGEST_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Work Digest", type: "number", default: "30", desc: "Max tool-calling turns the filing agent gets. Raise (e.g. 60) if long multi-workstream digests run out before finishing. More loops = more tokens." },
 
   // Personal Email
   "PERSONAL_MAIL_DRY_RUN": { label: "Dry run — propose only", category: "Personal Email", type: "toggle", default: "1", desc: "Independent of the work digest's dry run, so one can go live while the other still proposes. Dry runs leave no trace — nothing is marked as processed." },
+  "PERSONAL_MAIL_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Personal Email", type: "number", default: "30", desc: "Max tool-calling turns the triage/filing agent gets per pass. More loops = more tokens." },
   "PERSONAL_MAIL_FOLDER": { label: "Mail folder", category: "Personal Email", type: "text", default: "Inbox", desc: "The folder to triage. Nested folders are written \"Parent/Child\"." },
   "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max emails per run", category: "Personal Email", type: "number", default: "25", desc: "A backlog drains at this pace per nightly run. The Run Email Ingestion action can drain a whole backlog at once." },
   "PERSONAL_MAIL_LOOKBACK_DAYS": { label: "Lookback (days)", category: "Personal Email", type: "number", default: "0", desc: "How far before setup to backfill. 0 = only mail arriving after setup. Raising it backfills older mail; already-processed email is never re-filed." },
@@ -1579,6 +1618,12 @@ const envSchema = {
   "PERSONAL_MAIL_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Personal email override (optional)", desc: "Personal email can use a different AI than the work digest — e.g. keep personal mail on a local Ollama model for privacy. Leave blank to use the main model above." },
   "PERSONAL_MAIL_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
   "PERSONAL_MAIL_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },
+  "VAULT_QA_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Chat assistant override (optional)", desc: "Use a stronger model for the chat than for nightly filing — chat benefits from a bigger model, filing doesn't. Leave blank to use the main model above. Requires a restart." },
+  "VAULT_QA_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
+  "VAULT_QA_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },
+  "EMBED_BASE_URL": { label: "Embedding service URL", category: "AI Model", type: "text", default: "", subhead: "Semantic search (optional)", desc: "Turns on meaning-based chat search alongside keyword search, so paraphrased questions still find the right note. Recommended: a local Ollama server (http://host.docker.internal:11434/v1) after `ollama pull nomic-embed-text`. Leave blank to use keyword search only." },
+  "EMBED_MODEL": { label: "Embedding model", category: "AI Model", type: "text", default: "", desc: "e.g. nomic-embed-text (Ollama) or text-embedding-3-small (OpenAI-compatible)." },
+  "EMBED_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "", desc: "Leave blank for a local Ollama server." },
 
   // Notifications
   "NTFY_TOPIC": { label: "ntfy topic", category: "Notifications", type: "text", default: "", desc: "e.g. copilot-digest-a1b2c3. Anyone who knows the topic can read your notifications, so make it unguessable." },
@@ -2053,6 +2098,49 @@ document.getElementById('logs-follow').onchange = (e) => {
 
 // --- Manual ingestion (settings > Actions) ---
 let ingestPollTimer = null;
+let ingestSource = 'personal';
+let ingestLastStatus = {};
+let digestDryDefault = null;
+
+const INGEST_DESC = {
+  personal: 'Runs the personal-inbox triage now, instead of waiting for the nightly cron run. To backfill older mail, set a lookback (rewinds the watermark, never forward) or an explicit start/end window (ignores the watermark and leaves it untouched). Already-processed emails are never re-filed.',
+  digest: 'Runs the work-digest filing now, instead of waiting for the nightly cron run. Optionally backfill a specific work date.',
+};
+
+async function loadDigestDryDefault() {
+  // The digest dry-run toggle defaults to whatever the nightly job uses (.env DRY_RUN):
+  // absent or "1" => dry-run on; "0" => live.
+  try {
+    const res = await fetch('/api/settings/.env');
+    const data = await res.json();
+    const f = (data.fields || []).find(x => x.type === 'kv' && x.key === 'DRY_RUN');
+    return !(f && String(f.value).trim() === '0');
+  } catch (e) { return true; }
+}
+
+async function syncIngestSourceUI() {
+  const checked = document.querySelector('input[name="ingest-source"]:checked');
+  ingestSource = checked ? checked.value : 'personal';
+  document.getElementById('ingest-opts-personal').style.display = ingestSource === 'personal' ? '' : 'none';
+  document.getElementById('ingest-opts-digest').style.display = ingestSource === 'digest' ? '' : 'none';
+  document.getElementById('ingest-title').textContent =
+    ingestSource === 'digest' ? 'Work Digest Ingestion' : 'Personal Email Ingestion';
+  document.getElementById('ingest-desc').textContent = INGEST_DESC[ingestSource];
+  const dry = document.getElementById('ingest-dry-run');
+  const dryComment = document.getElementById('ingest-dry-comment');
+  if (ingestSource === 'digest') {
+    if (digestDryDefault === null) digestDryDefault = await loadDigestDryDefault();
+    dry.checked = digestDryDefault;
+    dryComment.textContent = "Propose only (staging/proposed.md), don't write to the vault. "
+      + "Defaults to the nightly Work Digest dry-run setting from Settings"
+      + (digestDryDefault ? " (currently: dry run)." : " (currently: LIVE).");
+  } else {
+    dry.checked = true;
+    dryComment.textContent = "Propose only (staging/personal/proposed.md), don't write to the vault. "
+      + "Dry runs leave the ledger and watermark untouched. Single pass only (drain has no effect).";
+  }
+}
+document.querySelectorAll('input[name="ingest-source"]').forEach(r => { r.onchange = syncIngestSourceUI; });
 
 function showIngestPanel() {
   document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
@@ -2062,12 +2150,14 @@ function showIngestPanel() {
   document.getElementById('settings-form').style.display = 'none';
   document.getElementById('settings-save-row').style.display = 'none';
   document.getElementById('ingest-panel').style.display = 'flex';
+  syncIngestSourceUI();
   // Re-attach to a run that's already in progress (e.g. after a page reload).
   pollIngestStatus();
 }
 document.getElementById('ingest-action').onclick = showIngestPanel;
 
 function renderIngestStatus(s) {
+  ingestLastStatus = s || {};
   const statusEl = document.getElementById('ingest-status');
   const logEl = document.getElementById('ingest-log');
   const runBtn = document.getElementById('ingest-run');
@@ -2075,15 +2165,18 @@ function renderIngestStatus(s) {
   const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
   logEl.textContent = s.log || '';
   if (atBottom) logEl.scrollTop = logEl.scrollHeight;
-  runBtn.disabled = s.running;
+  runBtn.disabled = s.running;              // any run in progress blocks a new one
   stopBtn.disabled = !s.running || s.stop_requested;
+  const srcLabel = s.source === 'digest' ? 'work digest' : (s.source === 'personal' ? 'personal' : '');
   if (s.running) {
     statusEl.textContent = s.stop_requested
-      ? 'Stopping...'
-      : 'Running... (pass ' + Math.max(s.passes + 1, 1) + ')';
+      ? 'Stopping ' + srcLabel + '...'
+      : 'Running ' + srcLabel + '... (pass ' + Math.max(s.passes + 1, 1) + ')';
   } else if (s.finished) {
     if (s.stop_requested) {
       statusEl.textContent = 'Stopped by user after ' + s.passes + ' pass(es).';
+    } else if (s.blocked) {
+      statusEl.textContent = 'Pipeline was busy (nightly run?) — nothing ingested. Try again later.';
     } else {
       statusEl.textContent = s.exit_code === 0
         ? 'Done: ' + s.passes + ' pass(es) completed.'
@@ -2097,7 +2190,7 @@ function renderIngestStatus(s) {
 async function pollIngestStatus() {
   clearTimeout(ingestPollTimer);
   try {
-    const res = await fetch('/api/ingest/personal/status');
+    const res = await fetch('/api/ingest/status');
     const s = await res.json();
     renderIngestStatus(s);
     if (s.running && document.getElementById('ingest-panel').style.display !== 'none') {
@@ -2110,47 +2203,48 @@ async function pollIngestStatus() {
 
 document.getElementById('ingest-run').onclick = async () => {
   const statusEl = document.getElementById('ingest-status');
-  const raw = document.getElementById('ingest-lookback').value.trim();
-  const startDate = document.getElementById('ingest-start').value;
-  const endDate = document.getElementById('ingest-end').value;
-  const body = {
-    dry_run: document.getElementById('ingest-dry-run').checked,
-    drain: document.getElementById('ingest-drain').checked,
-  };
-  if (raw !== '' && (startDate || endDate)) {
-    statusEl.textContent = 'Use either a lookback or a start/end date window, not both.';
-    return;
-  }
-  if (endDate && !startDate) {
-    statusEl.textContent = 'An end date requires a start date.';
-    return;
-  }
-  if (startDate && endDate && endDate < startDate) {
-    statusEl.textContent = 'End date must not be before the start date.';
-    return;
-  }
-  if (raw !== '') {
-    const days = Number(raw);
-    if (!Number.isInteger(days) || days < 0) {
-      statusEl.textContent = 'Lookback must be a whole number of days (or empty).';
-      return;
+  const dryRun = document.getElementById('ingest-dry-run').checked;
+  const body = { dry_run: dryRun };
+  let scopeText = '';
+  if (ingestSource === 'personal') {
+    const raw = document.getElementById('ingest-lookback').value.trim();
+    const startDate = document.getElementById('ingest-start').value;
+    const endDate = document.getElementById('ingest-end').value;
+    body.drain = document.getElementById('ingest-drain').checked;
+    if (raw !== '' && (startDate || endDate)) {
+      statusEl.textContent = 'Use either a lookback or a start/end date window, not both.'; return;
     }
-    body.lookback_days = days;
+    if (endDate && !startDate) { statusEl.textContent = 'An end date requires a start date.'; return; }
+    if (startDate && endDate && endDate < startDate) {
+      statusEl.textContent = 'End date must not be before the start date.'; return;
+    }
+    if (raw !== '') {
+      const days = Number(raw);
+      if (!Number.isInteger(days) || days < 0) {
+        statusEl.textContent = 'Lookback must be a whole number of days (or empty).'; return;
+      }
+      body.lookback_days = days;
+    }
+    if (startDate) body.start_date = startDate;
+    if (endDate) body.end_date = endDate;
+    scopeText = body.lookback_days != null
+      ? ' for the last ' + body.lookback_days + ' day(s) of email'
+      : (startDate ? ' for email from ' + startDate + ' to ' + (endDate || 'now') : '');
+  } else {
+    const workDate = document.getElementById('ingest-work-date').value;
+    if (workDate) { body.work_date = workDate; scopeText = ' for work date ' + workDate; }
   }
-  if (startDate) body.start_date = startDate;
-  if (endDate) body.end_date = endDate;
-  const scopeText = body.lookback_days != null
-    ? ' for the last ' + body.lookback_days + ' day(s) of email'
-    : (startDate ? ' for email from ' + startDate + ' to ' + (endDate || 'now') : '');
-  if (!body.dry_run && !confirm(
-      'Dry run is OFF: this run will write notes into your live vault' + scopeText +
-      '. A vault snapshot is taken first. Continue?')) {
+  if (!dryRun && !confirm(
+      (ingestSource === 'digest'
+        ? 'Dry run is OFF: this will file the work digest into your live vault'
+        : 'Dry run is OFF: this run will write notes into your live vault')
+      + scopeText + '. A vault snapshot is taken first. Continue?')) {
     return;
   }
   statusEl.textContent = 'Starting...';
   document.getElementById('ingest-run').disabled = true;
   try {
-    const res = await fetch('/api/ingest/personal', {
+    const res = await fetch('/api/ingest/' + ingestSource, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2172,13 +2266,14 @@ document.getElementById('ingest-run').onclick = async () => {
 document.getElementById('ingest-stop').onclick = async () => {
   const statusEl = document.getElementById('ingest-status');
   if (!confirm('Stop the running ingestion? The current batch is aborted mid-flight; ' +
-      'nothing is marked as processed for an aborted batch, so those emails are ' +
-      'picked up again by the next run.')) {
+      'nothing is marked as processed for an aborted batch, so those items are ' +
+      'picked up again by the next run. (This also stops a nightly cron run if one is active.)')) {
     return;
   }
   document.getElementById('ingest-stop').disabled = true;
+  const stopSource = ingestLastStatus.source || ingestSource;
   try {
-    const res = await fetch('/api/ingest/personal/stop', { method: 'POST' });
+    const res = await fetch('/api/ingest/' + stopSource + '/stop', { method: 'POST' });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       statusEl.textContent = err.error || ('Failed to stop (HTTP ' + res.status + ').');

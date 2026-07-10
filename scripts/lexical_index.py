@@ -22,9 +22,49 @@ _TOKEN_RE = re.compile(r"\w+")
 _HEADING_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
 _CHUNK_WORDS = 500
 _CHUNK_OVERLAP_WORDS = 50
+_SNIPPET_CHARS = 700
 
 RECENCY_HALFLIFE_DAYS = float(os.environ.get("VAULT_QA_RECENCY_HALFLIFE_DAYS", "90"))
 RECENCY_FLOOR = float(os.environ.get("VAULT_QA_RECENCY_FLOOR", "0.5"))
+
+# Canonical schema for the search_relevant tool. Lives here (not in vault_qa) so
+# the ingestion agent, the CLI, and the chat server all expose the identical tool;
+# vault_qa re-exports it for backwards compatibility.
+SEARCH_RELEVANT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_relevant",
+        "description": (
+            "Relevance search over chunked vault text - use for thematic/paraphrased "
+            "questions where you don't know the exact wording. Use grep_search instead "
+            "for exact identifiers (ticket numbers, exact names/dates). Results are "
+            "recency-weighted: at similar relevance, recently modified notes rank first "
+            "(each hit shows its age in days). Optionally narrow by folder (path_prefix) "
+            "or by note modification date (date_from/date_to, YYYY-MM-DD)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "top_k": {"type": "integer", "description": "Number of chunks to return (default 8)."},
+                "path_prefix": {"type": "string", "description": "Only return hits whose path starts with this (e.g. 'Work/CDLP/')."},
+                "date_from": {"type": "string", "description": "Only notes modified on/after this date (YYYY-MM-DD)."},
+                "date_to": {"type": "string", "description": "Only notes modified on/before this date (YYYY-MM-DD)."},
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+
+def _parse_date(s):
+    """YYYY-MM-DD -> unix seconds (local midnight), or None if unparseable."""
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        return time.mktime(time.strptime(s.strip(), "%Y-%m-%d"))
+    except (ValueError, OverflowError):
+        return None
 
 
 @dataclass
@@ -87,22 +127,55 @@ class LexicalIndex:
         self.chunks = chunks
         self._bm25 = BM25Okapi([_tokenize(c.text) for c in chunks]) if chunks else None
 
-    def search(self, query, top_k=8):
+    def rank(self, query, path_prefix=None, date_from=None, date_to=None, depth=None):
+        """Return [(chunk_index, weighted_score, raw_bm25_score), ...] best-first,
+        after applying the path/date filters. Shared by search() and the hybrid
+        fusion layer. `depth` truncates the list; None returns everything."""
+        if not self._bm25:
+            return []
+        raw = self._bm25.get_scores(_tokenize(query))
+        now = time.time()
+        prefix = (path_prefix or "").replace("\\", "/").lstrip("/") or None
+        from_ts = _parse_date(date_from)
+        to_ts = _parse_date(date_to)
+        if to_ts is not None:
+            to_ts += 86400  # make date_to inclusive of the whole day
+        weighted = []
+        for i, (s, c) in enumerate(zip(raw, self.chunks)):
+            if prefix and not c.path.replace("\\", "/").startswith(prefix):
+                continue
+            if from_ts is not None and (c.mtime <= 0 or c.mtime < from_ts):
+                continue
+            if to_ts is not None and (c.mtime <= 0 or c.mtime >= to_ts):
+                continue
+            weighted.append((i, s * _recency_factor(c.mtime, now), s))
+        weighted.sort(key=lambda x: -x[1])
+        if depth is not None:
+            weighted = weighted[:depth]
+        return weighted
+
+    def search(self, query, top_k=8, path_prefix=None, date_from=None, date_to=None):
         """Returns a plain string (grep_search-style), never raises. Ranking is
-        BM25 * recency factor (see module docstring)."""
+        BM25 * recency factor (see module docstring). Optional filters narrow the
+        candidate pool before ranking: path_prefix (folder), and date_from/date_to
+        on the note's modification time (YYYY-MM-DD strings)."""
         try:
             if not self._bm25:
                 return "No relevant chunks found (vault has no indexable text)."
-            raw = self._bm25.get_scores(_tokenize(query))
-            now = time.time()
-            weighted = [(s * _recency_factor(c.mtime, now), s, c)
-                        for s, c in zip(raw, self.chunks)]
-            ranked = sorted(weighted, key=lambda x: -x[0])[:max(1, top_k)]
-            if not ranked or ranked[0][1] <= 0:
+            ranked = self.rank(query, path_prefix=path_prefix,
+                               date_from=date_from, date_to=date_to)[:max(1, top_k)]
+            if not ranked:
+                note = ""
+                if path_prefix or date_from or date_to:
+                    note = " matching the given path/date filter"
+                return f"No relevant chunks found{note}."
+            if ranked[0][2] <= 0:
                 return "No relevant chunks found."
+            now = time.time()
             out = []
-            for score, raw_score, c in ranked:
-                snippet = c.text[:400]
+            for idx, score, raw_score in ranked:
+                c = self.chunks[idx]
+                snippet = c.text[:_SNIPPET_CHARS]
                 label = c.path + (f" ({c.heading})" if c.heading else "")
                 age = f", {max(0, int((now - c.mtime) / 86400))}d old" if c.mtime > 0 else ""
                 out.append(f"{label}  [score {score:.2f}{age}]\n{snippet}\n---")

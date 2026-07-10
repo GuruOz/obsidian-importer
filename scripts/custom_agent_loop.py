@@ -78,19 +78,67 @@ def safe_path(p: str) -> str:
 
 # --- Tools Implementation ---
 
-def read_file(path: str) -> str:
-    """Read the contents of a file."""
+# Directories that hold no filing/answer targets: dotdirs (.obsidian/.trash/
+# .smart-env), OneNote-import attachments, and raw exported chat logs. Skipped by
+# the nightly vault index and search_relevant; grep_search honors the same list so
+# it never surfaces plugin/config markdown the rest of the pipeline hides.
+_EXCLUDED_DIRS = ("Attachments", "smart-chats")
+
+# read_file default ceiling. Generous on purpose: the staged digest.md (9+
+# workstreams) is this tool's biggest legitimate payload and must not truncate
+# silently mid-ingestion. Chat questions rarely need a whole huge note at once
+# and can page with offset/limit.
+READ_FILE_MAX_CHARS = 50_000
+# grep_search caps: at most this many matching lines per file, and this many
+# total, so one noisy file can't crowd out the rest and a broad pattern reports
+# how much it hid instead of silently dropping it.
+GREP_MAX_PER_FILE = 5
+GREP_MAX_TOTAL = 100
+
+
+def _pruned_walk(root_dir):
+    """os.walk over the vault with the excluded dirs pruned in-place (dot-dirs +
+    _EXCLUDED_DIRS), yielding (root, files) - the shared traversal for grep."""
+    for root, dirs, files in os.walk(root_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _EXCLUDED_DIRS]
+        yield root, files
+
+
+def read_file(path: str, offset: int = 0, limit: int = None) -> str:
+    """Read a file. Reads at most READ_FILE_MAX_CHARS characters (or `limit` if
+    smaller) starting at character `offset`; when content is cut off, appends an
+    explicit notice with the byte range and how to continue, so the model never
+    silently acts on a truncated note."""
     try:
         p = safe_path(path)
         with open(p, "r", encoding="utf-8") as f:
-            return f.read()
+            content = f.read()
     except Exception as e:
         return f"Error reading file: {e}"
+    try:
+        offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        cap = int(limit) if limit else READ_FILE_MAX_CHARS
+    except (TypeError, ValueError):
+        cap = READ_FILE_MAX_CHARS
+    cap = max(1, min(cap, READ_FILE_MAX_CHARS))
+    total = len(content)
+    window = content[offset:offset + cap]
+    end = offset + len(window)
+    if offset > total:
+        return (f"[offset {offset} is past end of file ({total} chars). "
+                f"Call read_file with a smaller offset.]")
+    if offset > 0 or end < total:
+        return (window + f"\n\n[showing chars {offset}-{end} of {total}."
+                + (f" Call read_file with offset={end} to continue.]" if end < total else "]"))
+    return window
 
 def glob_search(pattern: str) -> str:
     """Find files in the vault matching a glob pattern."""
     matches = []
-    for root, _, files in os.walk(VAULT_DIR):
+    for root, files in _pruned_walk(VAULT_DIR):
         for f in files:
             rel = os.path.relpath(os.path.join(root, f), VAULT_DIR)
             if fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(f, pattern):
@@ -98,28 +146,67 @@ def glob_search(pattern: str) -> str:
     return "\n".join(matches) if matches else "No files found."
 
 def grep_search(query: str) -> str:
-    """Search for a regex string inside all markdown files in the vault."""
-    matches = []
+    """Search for a regex inside every markdown note (excluded dirs pruned).
+    Invalid regex falls back to a literal search rather than erroring. Results
+    are grouped per file and files ranked by match count, capped per-file and
+    overall, with an explicit note of anything truncated."""
+    literal = False
     try:
         regex = re.compile(query, re.IGNORECASE)
-        for root, _, files in os.walk(VAULT_DIR):
+    except re.error:
+        regex = re.compile(re.escape(query), re.IGNORECASE)
+        literal = True
+
+    per_file = {}          # rel path -> [ "line: text", ... ] (capped)
+    hidden_in_file = {}    # rel path -> count of matches beyond the per-file cap
+    try:
+        for root, files in _pruned_walk(VAULT_DIR):
             for f in files:
-                if f.endswith(".md"):
-                    p = os.path.join(root, f)
-                    try:
-                        with open(p, "r", encoding="utf-8", errors="ignore") as fobj:
-                            for i, line in enumerate(fobj):
-                                if regex.search(line):
-                                    rel = os.path.relpath(p, VAULT_DIR)
-                                    matches.append(f"{rel}:{i+1}: {line.strip()}")
-                                    if len(matches) > 100:
-                                        matches.append("... [too many matches, truncated]")
-                                        return "\n".join(matches)
-                    except Exception:
-                        pass
-        return "\n".join(matches) if matches else "No matches found."
+                if not f.endswith(".md"):
+                    continue
+                p = os.path.join(root, f)
+                rel = os.path.relpath(p, VAULT_DIR)
+                try:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as fobj:
+                        for i, line in enumerate(fobj):
+                            if regex.search(line):
+                                lst = per_file.setdefault(rel, [])
+                                if len(lst) < GREP_MAX_PER_FILE:
+                                    lst.append(f"{i+1}: {line.strip()}")
+                                else:
+                                    hidden_in_file[rel] = hidden_in_file.get(rel, 0) + 1
+                except Exception:
+                    pass
     except Exception as e:
         return f"Error in grep: {e}"
+
+    if not per_file:
+        return "No matches found."
+
+    # Rank files by total hits (shown + hidden), most-relevant first.
+    def total_hits(rel):
+        return len(per_file[rel]) + hidden_in_file.get(rel, 0)
+    ranked = sorted(per_file, key=lambda r: -total_hits(r))
+
+    out, shown, files_omitted, matches_omitted = [], 0, 0, 0
+    prefix = "Note: query was not valid regex; searched for it literally.\n" if literal else ""
+    for rel in ranked:
+        if shown >= GREP_MAX_TOTAL:
+            files_omitted += 1
+            matches_omitted += total_hits(rel)
+            continue
+        for entry in per_file[rel]:
+            if shown >= GREP_MAX_TOTAL:
+                matches_omitted += 1
+                continue
+            out.append(f"{rel}:{entry}")
+            shown += 1
+        if hidden_in_file.get(rel):
+            out.append(f"{rel}: ... +{hidden_in_file[rel]} more match(es) in this file")
+    if files_omitted or matches_omitted:
+        out.append(f"... truncated: {matches_omitted} more match(es) in {files_omitted} "
+                   "more file(s). Narrow the pattern to see them.")
+    return prefix + "\n".join(out)
 
 def write_file(path: str, content: str) -> str:
     """Write or overwrite a file."""
@@ -163,10 +250,16 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file.",
+            "description": ("Read the contents of a file. Returns up to 50000 characters; if the "
+                            "file is longer the result ends with a notice giving the character range "
+                            "and the offset to continue from."),
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Path to the file (relative to vault)"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Path to the file (relative to vault)"},
+                    "offset": {"type": "integer", "description": "Character offset to start reading from (default 0)."},
+                    "limit": {"type": "integer", "description": "Max characters to return (default/again capped at 50000)."}
+                },
                 "required": ["path"]
             }
         }
@@ -187,7 +280,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "grep_search",
-            "description": "Search for a regex string inside all markdown files in the vault.",
+            "description": ("Search for a regex inside every markdown note. Results are grouped by "
+                            "file and ranked by match count. An invalid regex is searched literally "
+                            "instead of erroring. Use for exact identifiers (ticket numbers, names)."),
             "parameters": {
                 "type": "object",
                 "properties": {"query": {"type": "string"}},
@@ -278,8 +373,12 @@ def render_prompt(prompt):
     return prompt.replace("{{DATE_CONTEXT}}", ctx)
 
 
-def make_client():
-    """Build the OpenAI-compatible client from LLM_* env vars, or raise ConfigError.
+def make_client(prefix=""):
+    """Build the OpenAI-compatible client from {prefix}LLM_* env vars, or raise
+    ConfigError. `prefix` lets a caller use its own endpoint while falling back
+    to the global one: e.g. make_client("VAULT_QA_") reads VAULT_QA_LLM_BASE_URL/
+    _MODEL/_API_KEY and only uses the plain LLM_* vars where those are unset - so
+    the chat can point at a stronger model than the nightly filing agent.
 
     LLM_API_KEY is optional so local OpenAI-compatible servers work out of the
     box - Ollama (http://host.docker.internal:11434/v1), LM Studio, llama.cpp
@@ -287,9 +386,11 @@ def make_client():
     placeholder is sent when none is configured; hosted providers will simply
     reject it, which surfaces as a clear 401 instead of a missing-var error.
     """
-    api_key = os.environ.get("LLM_API_KEY") or "ollama"
-    base_url = os.environ.get("LLM_BASE_URL")
-    model = os.environ.get("LLM_MODEL")
+    def _get(suffix):
+        return os.environ.get(f"{prefix}{suffix}") or os.environ.get(suffix)
+    api_key = _get("LLM_API_KEY") or "ollama"
+    base_url = _get("LLM_BASE_URL")
+    model = _get("LLM_MODEL")
     if not all([base_url, model]):
         raise ConfigError("LLM_BASE_URL and LLM_MODEL must be set for custom agent "
                           "(plus LLM_API_KEY unless the endpoint is a local server like Ollama).")
@@ -609,17 +710,44 @@ def main():
           f"Filing_Rules.md={'injected, ' + str(filing_rules_chars) + ' chars' if filing_rules_chars else 'not found'}")
 
     handlers = {
-        "read_file": lambda a: read_file(a.get("path", "")),
+        "read_file": lambda a: read_file(a.get("path", ""), a.get("offset", 0), a.get("limit")),
         "glob_search": lambda a: glob_search(a.get("pattern", "")),
         "grep_search": lambda a: grep_search(a.get("query", "")),
         "write_file": lambda a: write_file(a.get("path", ""), a.get("content", "")),
         "edit_file": lambda a: edit_file(a.get("path", ""), a.get("old_string", ""), a.get("new_string", "")),
     }
 
+    # Give the filing agent the same BM25 relevance search the chat uses, so it can
+    # find the canonical topic note for a recurring workstream even when the title
+    # doesn't match the digest's wording - not just shortlist from the index. Built
+    # once here (a few seconds for ~1.5k notes); if it fails the run continues
+    # without it rather than aborting the nightly job.
+    tools = TOOLS
+    try:
+        import lexical_index
+        _lex = lexical_index.build_index(VAULT_DIR)
+        handlers["search_relevant"] = lambda a: _lex.search(
+            a.get("query", ""), top_k=a.get("top_k") or 8,
+            path_prefix=a.get("path_prefix"),
+            date_from=a.get("date_from"), date_to=a.get("date_to"))
+        tools = TOOLS + [lexical_index.SEARCH_RELEVANT_TOOL]
+        _vlog(f"search_relevant enabled ({len(_lex.chunks)} chunks indexed)")
+    except Exception as e:  # noqa: BLE001
+        _vlog(f"search_relevant unavailable, continuing without it: {e}")
+
+    # Long multi-workstream digests can exceed the default 30-turn budget; make it
+    # tunable per source via DIGEST_MAX_LOOPS / PERSONAL_MAIL_MAX_LOOPS (resolved to
+    # AGENT_MAX_LOOPS by run-ingest.sh).
+    try:
+        max_loops = int(os.environ.get("AGENT_MAX_LOOPS", "30") or 30)
+    except ValueError:
+        max_loops = 30
+
     usage = {}
     t_run = time.time()
     try:
-        finish_args = run_loop(client, model, messages, TOOLS, handlers, usage_out=usage)
+        finish_args = run_loop(client, model, messages, tools, handlers,
+                               max_loops=max_loops, usage_out=usage)
     except AgentAPIError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

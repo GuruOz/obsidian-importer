@@ -6,9 +6,11 @@ includes write_file/edit_file, regardless of DRY_RUN or any request input.
 Run directly (used as the container's command, see docker-compose.yml):
     python3 scripts/vault_web.py
 """
+import difflib
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -21,6 +23,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 import custom_agent_loop as cal
 import lexical_index
+import semantic_index
 import session_store as store
 import vault_qa
 
@@ -47,9 +50,46 @@ def _check_auth():
     pass
 
 
-def _new_session():
+# Cache the (index, searcher) across sessions so a new chat doesn't re-walk and
+# re-tokenize the whole vault every time. Invalidated by a cheap stat signature
+# (note count + newest mtime), so vault edits made outside this process are picked
+# up without ever serving a stale index. The searcher's semantic layer keeps
+# syncing in the background against the same cached object.
+_INDEX_CACHE = {"sig": None, "index": None, "searcher": None}
+_INDEX_CACHE_LOCK = threading.Lock()
+
+
+def _vault_signature():
+    count, max_mtime = 0, 0.0
+    for root, dirs, files in os.walk(cal.VAULT_DIR):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ("Attachments", "smart-chats")]
+        for f in files:
+            if f.endswith(".md"):
+                count += 1
+                try:
+                    max_mtime = max(max_mtime, os.path.getmtime(os.path.join(root, f)))
+                except OSError:
+                    pass
+    return (count, max_mtime)
+
+
+def _get_search_context():
+    """(index, searcher) for a session, reused across sessions until the vault
+    changes. Building the indexes is slow; this makes new-chat latency the cost
+    of a stat walk when nothing changed."""
+    sig = _vault_signature()
+    with _INDEX_CACHE_LOCK:
+        if _INDEX_CACHE["sig"] == sig and _INDEX_CACHE["searcher"] is not None:
+            return _INDEX_CACHE["index"], _INDEX_CACHE["searcher"]
     index = vault_qa.build_vault_index()
-    lex = lexical_index.build_index(cal.VAULT_DIR)
+    searcher = semantic_index.build_searcher(cal.VAULT_DIR)
+    with _INDEX_CACHE_LOCK:
+        _INDEX_CACHE.update(sig=sig, index=index, searcher=searcher)
+    return index, searcher
+
+
+def _new_session():
+    index, lex = _get_search_context()
     system_content = vault_qa.build_system_prompt(index, lexical_index=lex)
     return {
         "messages": [{"role": "system", "content": system_content}],
@@ -125,6 +165,96 @@ def _cap_history(messages, max_turns):
         return
     cutoff = user_idxs[-max_turns]
     del messages[1:cutoff]
+
+
+# --- Citation verification -------------------------------------------------
+# The model self-reports citations (note path + verbatim snippet). We check each
+# snippet actually appears in the cited note and annotate c["verified"]; we never
+# drop or rewrite a citation. False negatives are expected (paraphrase, snippet
+# cut mid-word at the 300-char cap, a fact synthesized across two chunks), so the
+# UI wording is "couldn't locate this exact text", not "wrong".
+_PUNCT_MAP = str.maketrans({
+    "“": '"', "”": '"', "‘": "'", "’": "'",
+    "–": "-", "—": "-", " ": " ", "…": "...",
+})
+_VERIFY_SCAN_CAP = 200_000  # chars scanned per fuzzy check
+
+
+def _normalize_text(s):
+    s = (s or "").translate(_PUNCT_MAP).casefold()
+    # Strip markdown decoration and quotes so their presence/absence (curly vs
+    # straight, or a note quoting a phrase the model paraphrased unquoted) never
+    # decides a match.
+    s = re.sub(r"""[*_`#>\[\]"']""", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _read_full(path):
+    """Resolve a cited path (as-is, +.md, or by basename) and return its full
+    text, or None. Bypasses read_file's size cap so long notes verify correctly."""
+    path = (path or "").replace("\\", "/").strip("/")
+    if not path:
+        return None
+    candidates = [path]
+    if not path.endswith(".md"):
+        candidates.append(path + ".md")
+    for cand in dict.fromkeys(candidates):
+        try:
+            p = cal.safe_path(cand)
+        except Exception:
+            continue
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    return f.read()
+            except OSError:
+                pass
+    base = os.path.basename(path)
+    if not base.endswith(".md"):
+        base += ".md"
+    index, _ = _get_search_context()
+    for rel, _m in index:
+        if os.path.basename(rel) == base:
+            try:
+                with open(os.path.join(cal.VAULT_DIR, rel), encoding="utf-8", errors="ignore") as f:
+                    return f.read()
+            except OSError:
+                pass
+    return None
+
+
+def _snippet_verified(snippet, content):
+    ns = _normalize_text(snippet)
+    if len(ns) < 8:
+        return True                        # too short to meaningfully verify
+    nc = _normalize_text(content)
+    if ns in nc:
+        return True
+    # Fuzzy fallback for a snippet cut mid-word at the 300-char cap or with a
+    # small transcription slip: the longest contiguous run shared with the note
+    # must cover most of the snippet. Contiguity keeps this strict enough that a
+    # genuinely paraphrased/hallucinated snippet fails.
+    nc = nc[:_VERIFY_SCAN_CAP]
+    sm = difflib.SequenceMatcher(None, ns, nc, autojunk=False)
+    m = sm.find_longest_match(0, len(ns), 0, len(nc))
+    return m.size / len(ns) >= 0.85
+
+
+def _verify_citations(citations):
+    if not citations or not isinstance(citations, list):
+        return
+    cache = {}
+    for c in citations:
+        if not isinstance(c, dict):
+            continue
+        path = (c.get("path") or "").strip()
+        if not path:
+            c["verified"] = False
+            continue
+        if path not in cache:
+            cache[path] = _read_full(path) or ""
+        content = cache[path]
+        c["verified"] = bool(content) and _snippet_verified(c.get("snippet"), content)
 
 
 @app.route("/")
@@ -281,15 +411,24 @@ PIPELINE_CONTAINER = "copilot-digest-pipeline"
 INGEST_LOG_CAP = 200_000  # chars kept in the in-memory run log
 INGEST_MAX_PASSES = 20    # drain-mode safety cap (25 emails/pass -> 500 emails)
 
-# Single manual-ingestion run at a time. State survives page reloads (the UI
-# re-attaches via the status endpoint) but not a vault-qa restart - the run
-# itself lives in the pipeline container and finishes either way; only the
-# log view is lost.
+# The two ingestion sources the UI can run. Both invoke run-ingest.sh <source>;
+# they differ only in options (personal: lookback/window/drain; digest: work-date)
+# and default pass count (a digest is one email/day, so draining is a no-op).
+INGEST_SOURCES = {
+    "personal": {"title": "Personal Email"},
+    "digest": {"title": "Work Digest"},
+}
+
+# Single manual-ingestion run at a time, across BOTH sources - run-ingest.sh
+# serializes them on one vault flock anyway, so a second concurrent web run would
+# just block on the lock. State survives page reloads (the UI re-attaches via the
+# status endpoint) but not a vault-qa restart - the run itself lives in the
+# pipeline container and finishes either way; only the log view is lost.
 INGEST_LOCK = threading.Lock()
 INGEST_STATE = {
-    "running": False, "log": "", "exit_code": None,
+    "running": False, "source": None, "log": "", "exit_code": None,
     "passes": 0, "started": None, "finished": None,
-    "stop_requested": False,
+    "stop_requested": False, "blocked": False,
 }
 
 
@@ -315,8 +454,8 @@ def _ingest_append(text):
         INGEST_STATE["log"] = log
 
 
-def _run_ingest_pass(env_overrides):
-    """One `run-ingest.sh personal` execution inside the pipeline container.
+def _run_ingest_pass(source, env_overrides):
+    """One `run-ingest.sh <source>` execution inside the pipeline container.
     Streams its output into INGEST_STATE["log"]; returns (exit_code, output)."""
     create = _docker_api("POST", f"/containers/{PIPELINE_CONTAINER}/exec", {
         "AttachStdout": True, "AttachStderr": True,
@@ -324,7 +463,7 @@ def _run_ingest_pass(env_overrides):
         # multiplex, which curl can't unframe.
         "Tty": True,
         "Env": env_overrides,
-        "Cmd": ["/app/scripts/run-ingest.sh", "personal"],
+        "Cmd": ["/app/scripts/run-ingest.sh", source],
     })
     try:
         exec_id = json.loads(create.stdout).get("Id")
@@ -351,18 +490,27 @@ def _run_ingest_pass(env_overrides):
     return exit_code, "".join(chunks)
 
 
-def _ingest_worker(env_overrides, max_passes):
+def _ingest_worker(source, env_overrides, max_passes):
     exit_code = None
     try:
         for i in range(max_passes):
             if i:
                 _ingest_append(f"\n===== pass {i + 1} =====\n")
-            exit_code, output = _run_ingest_pass(env_overrides)
+            exit_code, output = _run_ingest_pass(source, env_overrides)
             with INGEST_LOCK:
                 INGEST_STATE["passes"] = i + 1
                 stop_requested = INGEST_STATE["stop_requested"]
             if stop_requested:
                 _ingest_append("\nStopped by user.\n")
+                break
+            # The pipeline container is busy (almost always the nightly cron run
+            # holding the vault flock). run-ingest.sh exits 0 with this line, so
+            # without special-casing it a drain would spin futile passes.
+            if "another ingestion run is already in progress" in output:
+                with INGEST_LOCK:
+                    INGEST_STATE["blocked"] = True
+                _ingest_append("\nThe pipeline is busy with another run (likely the "
+                               "nightly cron job). Nothing was ingested; try again later.\n")
                 break
             # run-ingest.sh exits 0 both after filing a batch and when the
             # fetcher found nothing (benign exit 20), so the drained signal is
@@ -402,26 +550,23 @@ def _valid_date(s):
         return False
 
 
-@app.route("/api/ingest/personal", methods=["POST"])
-def ingest_personal():
-    """Manually run personal-email ingestion in the pipeline container.
+def _start_ingest(source, env_overrides, max_passes):
+    """Claim the shared run slot and spawn the worker, or 409 if one is running."""
+    with INGEST_LOCK:
+        if INGEST_STATE["running"]:
+            busy = INGEST_STATE["source"] or "another"
+            return jsonify({"error": f"a {busy} ingestion run is already in progress"}), 409
+        INGEST_STATE.update(running=True, source=source, log="", exit_code=None, passes=0,
+                            started=time.time(), finished=None, stop_requested=False,
+                            blocked=False)
+    threading.Thread(target=_ingest_worker, args=(source, env_overrides, max_passes),
+                     daemon=True).start()
+    return jsonify({"ok": True})
 
-    Body (all optional):
-      lookback_days  int >= 0 - rewinds the watermark to now - N days for this
-                     run (never forward); omit to keep the current watermark.
-      start_date     "YYYY-MM-DD" - explicit-window backfill: ingest mail
-                     received on/after this date. Bypasses the watermark and
-                     leaves it untouched (the ledger still dedupes). Mutually
-                     exclusive with lookback_days.
-      end_date       "YYYY-MM-DD" (inclusive) - end of the explicit window;
-                     requires start_date. Omit for "until now".
-      dry_run        bool - override PERSONAL_MAIL_DRY_RUN for this run only.
-      drain          bool (default true) - repeat passes (25 emails each)
-                     until the backlog is empty, capped at INGEST_MAX_PASSES.
-                     Ignored for dry runs (nothing advances, so one pass only).
-    """
-    body = request.get_json(force=True, silent=True) or {}
 
+def _ingest_personal_body(body):
+    """Validate a personal-ingest request -> (env_overrides, max_passes) or an
+    (error_response, status) tuple."""
     lookback = body.get("lookback_days")
     if lookback is not None:
         if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback < 0:
@@ -453,33 +598,72 @@ def ingest_personal():
     max_passes = INGEST_MAX_PASSES if body.get("drain", True) else 1
     if dry_run:
         max_passes = 1  # dry runs never advance state; draining would repeat the batch
-
-    with INGEST_LOCK:
-        if INGEST_STATE["running"]:
-            return jsonify({"error": "an ingestion run is already in progress"}), 409
-        INGEST_STATE.update(running=True, log="", exit_code=None, passes=0,
-                            started=time.time(), finished=None, stop_requested=False)
-    threading.Thread(target=_ingest_worker, args=(env_overrides, max_passes),
-                     daemon=True).start()
-    return jsonify({"ok": True})
+    return env_overrides, max_passes
 
 
-@app.route("/api/ingest/personal/stop", methods=["POST"])
-def ingest_personal_stop():
+def _ingest_digest_body(body):
+    """Validate a work-digest request -> (env_overrides, max_passes) or an
+    (error_response, status) tuple. The digest has no watermark/lookback/window/
+    drain - only a dry-run toggle and an optional work-date backfill."""
+    for bad in ("lookback_days", "start_date", "end_date", "drain"):
+        if bad in body:
+            return jsonify({"error": f"{bad} is not supported for the work digest"}), 400
+    dry_run = body.get("dry_run")
+    if dry_run is not None and not isinstance(dry_run, bool):
+        return jsonify({"error": "dry_run must be a boolean"}), 400
+    work_date = body.get("work_date")
+    if work_date is not None and not _valid_date(work_date):
+        return jsonify({"error": "work_date must be a YYYY-MM-DD string"}), 400
+
+    env_overrides = []
+    if dry_run is not None:
+        # DIGEST_DRY_RUN (the prefixed var run-ingest.sh resolves ahead of the
+        # global DRY_RUN) so a manual run's toggle is authoritative without
+        # touching .env or the nightly cron behavior.
+        env_overrides.append(f"DIGEST_DRY_RUN={1 if dry_run else 0}")
+    if work_date:
+        env_overrides.append(f"WORK_DATE={work_date}")
+    return env_overrides, 1  # one email/day; draining is a no-op
+
+
+@app.route("/api/ingest/<source>", methods=["POST"])
+def ingest_source(source):
+    """Manually run an ingestion source (personal | digest) in the pipeline
+    container, mirroring the nightly cron job but on demand."""
+    if source not in INGEST_SOURCES:
+        return jsonify({"error": f"unknown source '{source}'"}), 404
+    body = request.get_json(force=True, silent=True) or {}
+    parser = _ingest_personal_body if source == "personal" else _ingest_digest_body
+    result = parser(body)
+    # Parsers return (env_overrides:list, max_passes:int) on success, or a Flask
+    # (error_response, status_code) tuple on a bad request.
+    if not isinstance(result[0], list):
+        return result
+    env_overrides, max_passes = result
+    return _start_ingest(source, env_overrides, max_passes)
+
+
+@app.route("/api/ingest/<source>/stop", methods=["POST"])
+def ingest_stop(source):
     """Stop the in-flight manual ingestion run: flag the worker to not start
     another pass, then SIGTERM the run's processes inside the pipeline
     container. Safe mid-batch: the ledger/watermark only commit at the end of
     a successful pass, so an aborted batch is re-fetched by the next run."""
+    if source not in INGEST_SOURCES:
+        return jsonify({"error": f"unknown source '{source}'"}), 404
     with INGEST_LOCK:
         if not INGEST_STATE["running"]:
             return jsonify({"error": "no ingestion run in progress"}), 409
+        if INGEST_STATE["source"] != source:
+            return jsonify({"error": f"a {INGEST_STATE['source']} run is in progress, not {source}"}), 409
         INGEST_STATE["stop_requested"] = True
     create = _docker_api("POST", f"/containers/{PIPELINE_CONTAINER}/exec", {
         "AttachStdout": True, "AttachStderr": True, "Tty": True,
         # pkill exits 1 when nothing matched (e.g. stop pressed between passes);
         # that's fine - the worker also checks stop_requested between passes.
+        # Covers both fetchers and both wrappers so either source can be stopped.
         "Cmd": ["pkill", "-TERM", "-f",
-                "run-ingest.sh|fetch_inbox.py|custom_agent_loop.py"],
+                "run-ingest.sh|run-digest.sh|fetch_inbox.py|fetch_digest.py|custom_agent_loop.py"],
     })
     try:
         exec_id = json.loads(create.stdout).get("Id")
@@ -491,8 +675,9 @@ def ingest_personal_stop():
     return jsonify({"ok": True})
 
 
-@app.route("/api/ingest/personal/status")
-def ingest_personal_status():
+@app.route("/api/ingest/status")
+@app.route("/api/ingest/<source>/status")  # back-compat alias; state is global
+def ingest_status(source=None):
     with INGEST_LOCK:
         return jsonify(dict(INGEST_STATE))
 
@@ -668,7 +853,9 @@ def chat():
             if finish_args is None:
                 q.put(("error", {"message": "Exceeded maximum tool call loops"}))
             else:
-                emit_answer(dict(finish_args))
+                payload = dict(finish_args)
+                _verify_citations(payload.get("citations"))
+                emit_answer(payload)
         except cal.AgentCancelled as e:
             # Solidify whatever streamed before the stop as a stored answer.
             emit_answer({"answer": e.partial_answer or "", "stopped": True})
@@ -767,15 +954,21 @@ def simulator_email():
         vault_index = os.path.join(tmpdir, "vault_index.txt")
         try:
             index_lines = []
-            for root, _, files in os.walk(cal.VAULT_DIR):
-                if "/." in root or "/Attachments" in root or "/smart-chats" in root:
-                    continue
+            for root, dirs, files in os.walk(cal.VAULT_DIR):
+                dirs[:] = [d for d in dirs if not d.startswith(".")
+                           and d not in ("Attachments", "smart-chats")]
                 for fname in files:
                     if fname.endswith(".md") and not fname.startswith("."):
-                        rel = os.path.relpath(os.path.join(root, fname), cal.VAULT_DIR)
-                        index_lines.append(rel)
+                        abs_path = os.path.join(root, fname)
+                        rel = os.path.relpath(abs_path, cal.VAULT_DIR)
+                        try:
+                            mtime = os.path.getmtime(abs_path)
+                        except OSError:
+                            mtime = 0
+                        # Same "YYYY-MM-DD<TAB>path" format run-ingest.sh writes.
+                        index_lines.append((rel, f"{datetime.fromtimestamp(mtime):%Y-%m-%d}\t{rel}"))
             with open(vault_index, "w", encoding="utf-8") as f:
-                f.write("\n".join(sorted(index_lines)))
+                f.write("\n".join(line for _, line in sorted(index_lines)))
         except Exception as e:
             print(f"Simulator warning: failed to generate vault_index.txt: {e}", file=sys.stderr)
             
@@ -819,7 +1012,9 @@ def simulator_email():
 def _init_client():
     global CLIENT, MODEL
     try:
-        CLIENT, MODEL = cal.make_client()
+        # Chat can use a stronger model than nightly filing via VAULT_QA_LLM_*
+        # (falls back to the global LLM_* vars when unset).
+        CLIENT, MODEL = cal.make_client(prefix="VAULT_QA_")
     except cal.ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)

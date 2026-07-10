@@ -93,8 +93,13 @@ LLM_MODEL="$(pref LLM_MODEL "${LLM_MODEL:-}")"
 LLM_BASE_URL="$(pref LLM_BASE_URL "${LLM_BASE_URL:-}")"
 LLM_API_KEY="$(pref LLM_API_KEY "${LLM_API_KEY:-}")"
 
+# Agent loop budget, tunable per source (DIGEST_MAX_LOOPS / PERSONAL_MAIL_MAX_LOOPS,
+# global INGEST_MAX_LOOPS fallback). Long multi-workstream digests can need more
+# than the built-in default of 30 turns; custom_agent_loop.py reads AGENT_MAX_LOOPS.
+AGENT_MAX_LOOPS="$(pref MAX_LOOPS "${INGEST_MAX_LOOPS:-30}")"
+
 export VAULT_DIR WORKDIR STAGING_DIR LEDGER_FILE DRY_RUN WATERMARK_FILE \
-    LLM_MODEL LLM_BASE_URL LLM_API_KEY
+    LLM_MODEL LLM_BASE_URL LLM_API_KEY AGENT_MAX_LOOPS
 
 # Optional work-date override (backfilling a specific day), same contract as before.
 WORK_DATE="${WORK_DATE_ARG:-${WORK_DATE:-}}"
@@ -190,11 +195,21 @@ AGENT_LOG="${LOG_DIR}/agent.${SOURCE}.${TODAY}.json"
 # create-vs-update candidates by title in one read, instead of burning turns (and
 # tokens) on exploratory vault-wide searches - cheaper AND more complete coverage.
 # Attachments (OneNote-import artifacts) and smart-chats are never filing targets.
+# Each line is "YYYY-MM-DD<TAB>path" (the note's last-modified date); a recently
+# modified topic note matching a workstream is the likely continuation target.
 (cd "$VAULT_DIR" && find . -name '*.md' \
     -not -path './.*' \
     -not -path './Attachments/*' \
     -not -path './smart-chats/*' \
-    | sed 's|^\./||' | sort) > "${STAGING_DIR}/vault_index.txt"
+    -printf '%TY-%Tm-%Td\t%P\n' | sort -k2) > "${STAGING_DIR}/vault_index.txt"
+
+# Stage the tail of this source's Filing Log so the agent can see where recent
+# runs filed recurring workstreams and continue them in the same canonical note.
+if [ -f "$FILING_LOG" ]; then
+    tail -n 30 "$FILING_LOG" > "${STAGING_DIR}/recent_filing_log.md"
+else
+    rm -f "${STAGING_DIR}/recent_filing_log.md"
+fi
 
 log "Invoking agent (LLM_MODEL: ${LLM_MODEL:-unknown}, prompt: ${PROMPT_FILE}, log: ${AGENT_LOG})..."
 AGENT_START_TS=$(date +%s)
@@ -237,6 +252,14 @@ else
     log "Filing complete (${REPORT:-no summary})"
     "$NOTIFY" "$SRC_TITLE filed" "${REPORT:-Batch was filed into the vault.}" default white_check_mark
 fi
+
+# --- Deterministic post-run verification (warn-only, never blocks the commit).
+# Runs before the ledger commit so pending_ids.txt is still present. On a live run
+# it appends a verify sub-line to the Filing Log entry filing_report just wrote. ---
+VERIFY_ARGS=(--source "$SOURCE" --staging-dir "$STAGING_DIR" --vault-dir "$VAULT_DIR" \
+    --agent-log "$AGENT_LOG" --filing-log "$FILING_LOG")
+if [ "$DRY_RUN" = "1" ]; then VERIFY_ARGS+=(--dry-run); fi
+python3 "${SCRIPT_DIR}/verify_filing.py" "${VERIFY_ARGS[@]}" 2>&1 | tee -a "$DIGEST_LOG" || true
 
 # --- Commit the ledger only now that the run demonstrably succeeded. If anything
 # above failed, the staged ids stay un-ledgered and tomorrow's fetch retries them. ---

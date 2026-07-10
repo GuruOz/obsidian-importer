@@ -14,7 +14,7 @@ this agent cannot write or edit anything, regardless of DRY_RUN.
 import sys
 
 import custom_agent_loop as cal
-import lexical_index
+import semantic_index
 import vault_qa
 
 
@@ -25,13 +25,17 @@ def main():
     question = " ".join(sys.argv[1:]).strip()
 
     try:
-        client, model = cal.make_client()
+        # Chat can point at a stronger model than nightly filing via VAULT_QA_LLM_*
+        # (falls back to the global LLM_* vars).
+        client, model = cal.make_client(prefix="VAULT_QA_")
     except cal.ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
     index = vault_qa.build_vault_index()
-    lex = lexical_index.build_index(cal.VAULT_DIR)
+    # BM25, plus semantic (embedding) search fused in when EMBED_* is configured
+    # and the index is already synced; otherwise lexical-only.
+    lex = semantic_index.build_searcher(cal.VAULT_DIR)
     system_content = vault_qa.build_system_prompt(index, lexical_index=lex)
 
     messages = [

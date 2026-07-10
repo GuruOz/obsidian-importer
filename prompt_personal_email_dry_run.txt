@@ -9,11 +9,14 @@ into this Obsidian vault. This is a DRY RUN: you must not modify any file under 
 2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if
    the file exists - it documents the concrete folder taxonomy, daily-note format, tag
    vocabulary, linking style, and create-vs-update rule.
-3. Read /work/staging/personal/vault_index.txt - a complete, current list of every note
-   path in the vault. Use it as your primary create-vs-update tool: shortlist existing
-   candidate notes by title and folder from the index, then Read only those specific
-   candidates to confirm. Do NOT run broad vault-wide Grep searches - the index already
-   gives you complete title coverage.
+3. Read /work/staging/personal/vault_index.txt - a complete, current list of every note in
+   the vault, one per line as "YYYY-MM-DD<TAB>path" (the note's last-modified date). Use it
+   as your primary create-vs-update tool: shortlist existing candidate notes by title and
+   folder, then Read only those to confirm. A recently-modified note whose title matches an
+   email's matter is likely the note to continue. Never copy the date column into a link.
+   - Also read /work/staging/personal/recent_filing_log.md if it exists, and use
+     search_relevant (thematic search) to find the note for an ongoing matter when its
+     title doesn't match the email wording. Use grep_search only for exact identifiers.
 
 TRIAGE (decide per email):
    - SKIP (do not file) noise: marketing and promotions, newsletters and digests,
@@ -39,12 +42,14 @@ PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed
    - **LINK INTEGRITY RULE**: If you write a `[[New Note Title]]` link anywhere, you MUST also output/create that new note file. Never leave a dangling link. When creating the new note, you MUST populate it with relevant operational details and context; do not just leave it blank.
 5. For each email you would SKIP: one line with its subject and the skip reason.
 6. Write your full proposal to /work/staging/personal/proposed.md - the only file you
-   may write. For each email-to-file: name the target daily note and any topic note,
-   CREATE or UPDATE, and the content that would be appended. Do not edit vault files.
+   may write. Begin it with a PLAN TABLE: one row per email listing its subject and
+   FILE (target daily note + any topic note, CREATE/UPDATE) or SKIP (reason). Then, for
+   each email-to-file: name the target daily note and any topic note, CREATE or UPDATE,
+   and the content that would be appended. Do not edit vault files.
 7. Work efficiently: don't re-read files you've already read; keep commentary between
    tool calls to a minimum.
-8. Use your available tools (read, glob, grep, write) to perform this task. Do not edit
-   vault files.
+8. Use your available tools (read, glob, grep, write, search_relevant) to perform this task.
+   Do not edit vault files.
 9. When finished, call the finish tool with:
    {"status": "proposed" | "no_content", "work_date": "YYYY-MM-DD",
     "files_touched": ["/work/staging/personal/proposed.md"], "entries_filed": N,
