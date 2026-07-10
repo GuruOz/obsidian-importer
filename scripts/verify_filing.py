@@ -65,6 +65,13 @@ def staged_note_ids(staging_dir):
     return re.findall(r"(?m)^Message-ID:\s*(\S+)", text)
 
 
+def has_digest_section(staging_dir):
+    """Whether the staged batch contains an actual daily-summary digest
+    (vs. being entirely ad-hoc notes, which never carry a copilot-digest
+    marker/date of their own)."""
+    return "## Digest received" in _read(os.path.join(staging_dir, "digest.md"))
+
+
 def _norm_title(s):
     """Normalize a note title for fuzzy matching: casefold, treat spaces,
     underscores and hyphens as one separator, drop other punctuation."""
@@ -317,27 +324,37 @@ def main():
     result = filing_report.last_status_json(args.agent_log) or {}
     status = result.get("status", "unknown")
 
-    # Expected work dates. For the digest, trust the staged batch's own stated
-    # "Work Log - <date>" lines over the agent's self-report (they exist even
-    # when the agent hit its turn limit and never called finish). An explicit
-    # WORK_DATE override (manual backfill) forces the whole batch to one date.
+    reported = result.get("work_dates") or result.get("work_date") or []
+    if not isinstance(reported, list):
+        reported = [reported]
+    reported = [str(d) for d in reported if d]
+
+    # Dates that actually carry a daily-summary digest and so are expected to
+    # have a copilot-digest marker. An explicit WORK_DATE override (manual
+    # backfill) forces the whole batch to one date. Trust the staged batch's
+    # own stated "Work Log - <date>" lines over the agent's self-report where
+    # possible (they exist even when the agent never called finish); only fall
+    # back to the report if real digest content failed to parse a date. A
+    # batch that is entirely ad-hoc notes has no digest section at all, so no
+    # date should be marker-checked for it.
     if os.environ.get("WORK_DATE"):
-        work_dates = [os.environ["WORK_DATE"]]
+        digest_dates = [os.environ["WORK_DATE"]]
     elif args.source == "digest":
-        work_dates = digest_work_dates(args.staging_dir)
+        digest_dates = digest_work_dates(args.staging_dir)
+        if not digest_dates and has_digest_section(args.staging_dir):
+            digest_dates = reported
     else:
-        work_dates = []
-    if not work_dates:
-        reported = result.get("work_dates") or result.get("work_date") or []
-        if not isinstance(reported, list):
-            reported = [reported]
-        work_dates = [str(d) for d in reported if d]
+        digest_dates = []
+
+    # Broader date set (digest dates plus ad-hoc-note-only dates) used only to
+    # find fallback link-check targets when the agent reported no files_touched.
+    all_dates = sorted(set(digest_dates) | set(reported))
 
     files_touched = [_norm_rel(p, args.vault_dir) for p in (result.get("files_touched") or [])]
     if not files_touched and args.source == "digest" and not args.dry_run:
         # Agent gave no final summary; the daily notes for the batch's dates are
         # the guaranteed touch targets, so link checks/repairs still run there.
-        for wd in work_dates:
+        for wd in all_dates:
             for p in glob.glob(os.path.join(args.vault_dir, "Daily jounal", f"{wd}*.md")):
                 files_touched.append(_norm_rel(p, args.vault_dir))
 
@@ -353,7 +370,7 @@ def main():
             check_dry_run(args.source, args.staging_dir, result, warn)
         else:
             pre_paths = _pre_run_paths(args.staging_dir)
-            check_markers(args.source, status, work_dates, args.staging_dir, args.vault_dir, warn)
+            check_markers(args.source, status, digest_dates, args.staging_dir, args.vault_dir, warn)
             check_links(files_touched, args.vault_dir, warn, fixed)
             check_duplicates(files_touched, pre_paths, args.vault_dir, warn)
             check_coverage(args.source, status, args.staging_dir, result, warn)
