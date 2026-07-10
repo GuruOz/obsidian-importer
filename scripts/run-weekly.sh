@@ -71,4 +71,9 @@ REPORT="$(python3 "${SCRIPT_DIR}/filing_report.py" "$AGENT_LOG" \
 log "Weekly rollup complete (${REPORT:-no summary})"
 "$NOTIFY" "Weekly Review ready" "${REPORT:-Weekly review note written for ${WEEK_ID}.}" default white_check_mark
 
+# This container runs as root; the dockerized Obsidian client runs as
+# PUID=1000/PGID=1000, so a root-owned note it just wrote would EACCES
+# Obsidian's own sync process (same fix as run-ingest.sh).
+chown -R 1000:1000 "$VAULT_DIR" 2>&1 | tee -a "$DIGEST_LOG" || true
+
 find "$LOG_DIR" -name 'weekly.*.json' -type f -mtime +90 -exec rm -f {} \;

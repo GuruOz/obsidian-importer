@@ -265,6 +265,16 @@ VERIFY_ARGS=(--source "$SOURCE" --staging-dir "$STAGING_DIR" --vault-dir "$VAULT
 if [ "$DRY_RUN" = "1" ]; then VERIFY_ARGS+=(--dry-run); fi
 python3 "${SCRIPT_DIR}/verify_filing.py" "${VERIFY_ARGS[@]}" 2>&1 | tee -a "$DIGEST_LOG" || true
 
+# --- Fix ownership after any live vault write. This container runs as root (no
+# USER in the Dockerfile), but the dockerized Obsidian client runs as
+# PUID=1000/PGID=1000 (see docker-compose.yml), so files this container just
+# created land root:root and Obsidian's own sync process gets EACCES trying to
+# read/write/merge them. Cheap and idempotent - re-chowning unchanged files is
+# a no-op. ---
+if [ "$DRY_RUN" != "1" ]; then
+    chown -R 1000:1000 "$VAULT_DIR" 2>&1 | tee -a "$DIGEST_LOG" || true
+fi
+
 # --- Commit the ledger only now that the run demonstrably succeeded. If anything
 # above failed, the staged ids stay un-ledgered and tomorrow's fetch retries them. ---
 if [ "$DRY_RUN" != "1" ]; then
