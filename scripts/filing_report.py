@@ -73,18 +73,43 @@ def main():
 
     result = last_status_json(log_path)
     if not result:
-        return  # nothing parseable; orchestrator falls back to generic text
+        # No parseable finish summary (typically the agent hit its turn limit and
+        # never called finish). The vault may still have been modified, so a live
+        # run must not vanish from the audit trail: append an "unreported" line
+        # instead of silently skipping it.
+        print("unreported | agent gave no final summary (likely hit its turn limit)")
+        if vault_log:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            line = (f"- {stamp} — **unreported** — agent gave no final summary "
+                    f"(likely hit its turn limit; see the agent log)\n")
+            os.makedirs(os.path.dirname(vault_log), exist_ok=True)
+            is_new = not os.path.exists(vault_log)
+            with open(vault_log, "a", encoding="utf-8") as f:
+                if is_new:
+                    f.write("# Filing Log\n\nOne line per pipeline run that changed the vault. "
+                            "Maintained automatically by the ingestion pipeline.\n\n")
+                f.write(line)
+        return
 
     status = result.get("status", "unknown")
-    work_date = result.get("work_date", "")
+    # Newer prompts report every date filed under as work_dates: [...]; older ones
+    # (and the personal source) report a single work_date string.
+    work_dates = result.get("work_dates") or []
+    if not isinstance(work_dates, list):
+        work_dates = [work_dates]
+    if not work_dates and result.get("work_date"):
+        work_dates = [result.get("work_date")]
+    work_dates = [str(d) for d in work_dates if d]
+    work_date = ", ".join(work_dates)
     entries = result.get("entries_filed")
     skipped = result.get("skipped")
     skipped_details = [str(s) for s in (result.get("skipped_details") or [])]
     files = [str(p) for p in (result.get("files_touched") or [])]
 
+    date_label = "work dates" if len(work_dates) > 1 else "work date"
     parts = [status]
     if work_date:
-        parts.append(f"work date {work_date}")
+        parts.append(f"{date_label} {work_date}")
     if entries is not None:
         parts.append(f"{entries} entries")
     if skipped is not None:
@@ -101,7 +126,7 @@ def main():
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         line = f"- {stamp} — **{status}**"
         if work_date:
-            line += f" — work date {work_date}"
+            line += f" — {date_label} {work_date}"
         if entries is not None:
             line += f" — {entries} entries"
         if skipped is not None:

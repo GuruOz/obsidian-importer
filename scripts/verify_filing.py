@@ -31,6 +31,40 @@ COVERAGE_WARN_FRACTION = 0.5   # warn if digest entries_filed < this * workstrea
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]")
 _MDLINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+\.md)\)")
 
+# "Work Log - 09 Jul 2026" style date line inside a staged digest body. The body
+# is html2text output, so the hyphen may arrive escaped ("\-") or as an en/em dash.
+_WORK_LOG_RE = re.compile(
+    r"Work Log\s*(?:\\?-|–|—)?\s*(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})",
+    re.IGNORECASE)
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+           "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+
+
+def digest_work_dates(staging_dir):
+    """Work dates the staged digest batch claims to describe, in file order.
+
+    Derived from the digest content itself (each bundled email states its own
+    "Work Log - <DD Mon YYYY>" date), so the check doesn't depend on the agent
+    self-reporting correctly - or reporting at all."""
+    text = _read(os.path.join(staging_dir, "digest.md"))
+    dates = []
+    for day, mon, year in _WORK_LOG_RE.findall(text):
+        m = _MONTHS.get(mon[:3].lower())
+        if not m:
+            continue
+        iso = f"{int(year):04d}-{m:02d}-{int(day):02d}"
+        if iso not in dates:
+            dates.append(iso)
+    return dates
+
+
+def _norm_title(s):
+    """Normalize a note title for fuzzy matching: casefold, treat spaces,
+    underscores and hyphens as one separator, drop other punctuation."""
+    s = re.sub(r"[ _\-]+", " ", s.casefold())
+    s = re.sub(r"[^\w ]", "", s)
+    return s.strip()
+
 
 def _norm_rel(path, vault_dir):
     """A vault-relative, forward-slash path from an absolute or relative one."""
@@ -85,19 +119,20 @@ def _pre_run_paths(staging_dir):
     return paths
 
 
-def check_markers(source, status, work_date, staging_dir, vault_dir, warn):
+def check_markers(source, status, work_dates, staging_dir, vault_dir, warn):
     if status in ("skipped_duplicate", "no_content"):
         return
     if source == "digest":
-        if not work_date:
-            return
-        matches = glob.glob(os.path.join(vault_dir, "Daily jounal", f"{work_date}*.md"))
-        if not matches:
-            warn(f"no daily note found for work date {work_date}")
-            return
-        marker = f"<!-- copilot-digest:{work_date} -->"
-        if not any(marker in _read(m) for m in matches):
-            warn(f"idempotency marker {marker} not found in the {work_date} daily note")
+        # A batch may bundle digests for several days (a late send plus the
+        # current day); every stated date must have its own daily note + marker.
+        for work_date in work_dates:
+            matches = glob.glob(os.path.join(vault_dir, "Daily jounal", f"{work_date}*.md"))
+            if not matches:
+                warn(f"no daily note found for work date {work_date}")
+                continue
+            marker = f"<!-- copilot-digest:{work_date} -->"
+            if not any(marker in _read(m) for m in matches):
+                warn(f"idempotency marker {marker} not found in the {work_date} daily note")
     else:  # personal: each pending message id should have left a marker somewhere
         pending = _read(os.path.join(staging_dir, "pending_ids.txt")).split()
         if not pending:
@@ -115,28 +150,61 @@ def check_markers(source, status, work_date, staging_dir, vault_dir, warn):
                  "(unexpected if they were meant to be filed)")
 
 
-def check_links(files_touched, vault_dir, warn):
+def check_links(files_touched, vault_dir, warn, fixed):
+    """Flag dangling links; auto-repair a wikilink whose target differs from
+    exactly one existing note only by separators/punctuation (e.g. the agent
+    wrote 'TrackingID 123' where the note is 'TrackingID_123'). Ambiguous or
+    genuinely unresolvable targets are warned about, never guessed at."""
     notes = _vault_notes(vault_dir)
     by_rel = {p.lower() for p in notes}
     by_base = {os.path.basename(p)[:-3].lower() for p in notes}  # name without .md
+    norm_map = {}
+    for p in notes:
+        base = os.path.basename(p)[:-3]
+        norm_map.setdefault(_norm_title(base), set()).add(base)
     dangling = []
     for rel in files_touched:
         abs_path = os.path.join(vault_dir, rel)
         if not os.path.isfile(abs_path):
             continue
         text = _read(abs_path)
-        targets = set(_WIKILINK_RE.findall(text))
+        new_text = text
+        for raw in set(_WIKILINK_RE.findall(text)):
+            name = raw.strip()
+            if not name:
+                continue
+            # Attachment embeds ([[IMG_1.webp]], [[scan.pdf]]) live outside the
+            # note index (Attachments/ is excluded) - never note targets, skip.
+            if re.search(r"\.[A-Za-z0-9]{2,5}$", name) and not name.lower().endswith(".md"):
+                continue
+            base = name.split("/")[-1]
+            if base.lower() in by_base or name.lower() in by_rel:
+                continue
+            candidates = norm_map.get(_norm_title(base), set())
+            if len(candidates) == 1:
+                new_base = next(iter(candidates))
+                new_raw = raw.replace(base, new_base)
+                # Anchor on the wikilink opener and require the target to end
+                # right after (at ]], an alias |, or a #/^ anchor) so a link
+                # that merely PREFIXES a longer title is never rewritten.
+                pattern = re.compile(r"\[\[" + re.escape(raw) + r"(?=[\]|#^])")
+                new_text = pattern.sub("[[" + new_raw, new_text)
+                fixed.append((rel, name, new_base))
+            else:
+                dangling.append((rel, name))
         for m in _MDLINK_RE.findall(text):
-            targets.add(re.sub(r"\.md$", "", m.split("/")[-1]))
-        for t in targets:
-            t = t.strip()
-            if not t:
-                continue
-            name = t[:-3] if t.lower().endswith(".md") else t
-            base = name.split("/")[-1].lower()
-            if base in by_base or name.lower() in by_rel:
-                continue
-            dangling.append((rel, t))
+            t = re.sub(r"\.md$", "", m.split("/")[-1])
+            if t and t.lower() not in by_base and m.lower() not in by_rel:
+                dangling.append((rel, t))
+        if new_text != text:
+            try:
+                with open(abs_path, "w", encoding="utf-8") as f:
+                    f.write(new_text)
+            except OSError as e:
+                warn(f"could not write link repair to {rel}: {e}")
+    for rel, name, new_base in fixed:
+        print(f"verify: fixed link '[[{name}]]' -> '[[{new_base}]]' in {rel}",
+              file=sys.stderr, flush=True)
     for rel, t in dangling[:15]:
         warn(f"dangling link [[{t}]] in {rel} resolves to no note")
     if len(dangling) > 15:
@@ -204,15 +272,16 @@ def check_dry_run(source, staging_dir, result, warn):
             warn(f"coverage: digest has ~{n_ws} workstream(s) but proposal files {filed}")
 
 
-def append_filing_log(filing_log, n_warnings, warnings):
+def append_filing_log(filing_log, n_warnings, warnings, n_fixed=0):
     if not filing_log or not os.path.isfile(filing_log):
         return  # nothing to attach to (e.g. dry run wrote no Filing Log entry)
+    fixed_note = f" ({n_fixed} link(s) auto-repaired)" if n_fixed else ""
     if n_warnings == 0:
-        line = "    - verify: OK\n"
+        line = f"    - verify: OK{fixed_note}\n"
     else:
         summary = "; ".join(warnings[:3])
         more = f" (+{n_warnings - 3} more)" if n_warnings > 3 else ""
-        line = f"    - verify: {n_warnings} warning(s): {summary}{more}\n"
+        line = f"    - verify: {n_warnings} warning(s): {summary}{more}{fixed_note}\n"
     try:
         with open(filing_log, "a", encoding="utf-8") as f:
             f.write(line)
@@ -232,10 +301,33 @@ def main():
 
     result = filing_report.last_status_json(args.agent_log) or {}
     status = result.get("status", "unknown")
-    work_date = result.get("work_date", "")
+
+    # Expected work dates. For the digest, trust the staged batch's own stated
+    # "Work Log - <date>" lines over the agent's self-report (they exist even
+    # when the agent hit its turn limit and never called finish). An explicit
+    # WORK_DATE override (manual backfill) forces the whole batch to one date.
+    if os.environ.get("WORK_DATE"):
+        work_dates = [os.environ["WORK_DATE"]]
+    elif args.source == "digest":
+        work_dates = digest_work_dates(args.staging_dir)
+    else:
+        work_dates = []
+    if not work_dates:
+        reported = result.get("work_dates") or result.get("work_date") or []
+        if not isinstance(reported, list):
+            reported = [reported]
+        work_dates = [str(d) for d in reported if d]
+
     files_touched = [_norm_rel(p, args.vault_dir) for p in (result.get("files_touched") or [])]
+    if not files_touched and args.source == "digest" and not args.dry_run:
+        # Agent gave no final summary; the daily notes for the batch's dates are
+        # the guaranteed touch targets, so link checks/repairs still run there.
+        for wd in work_dates:
+            for p in glob.glob(os.path.join(args.vault_dir, "Daily jounal", f"{wd}*.md")):
+                files_touched.append(_norm_rel(p, args.vault_dir))
 
     warnings = []
+    fixed = []
 
     def warn(msg):
         warnings.append(msg)
@@ -246,11 +338,11 @@ def main():
             check_dry_run(args.source, args.staging_dir, result, warn)
         else:
             pre_paths = _pre_run_paths(args.staging_dir)
-            check_markers(args.source, status, work_date, args.staging_dir, args.vault_dir, warn)
-            check_links(files_touched, args.vault_dir, warn)
+            check_markers(args.source, status, work_dates, args.staging_dir, args.vault_dir, warn)
+            check_links(files_touched, args.vault_dir, warn, fixed)
             check_duplicates(files_touched, pre_paths, args.vault_dir, warn)
             check_coverage(args.source, status, args.staging_dir, result, warn)
-            append_filing_log(args.filing_log, len(warnings), warnings)
+            append_filing_log(args.filing_log, len(warnings), warnings, len(fixed))
     except Exception as e:  # noqa: BLE001 - verification must never break the run
         print(f"verify: check skipped due to error: {e}", file=sys.stderr, flush=True)
 

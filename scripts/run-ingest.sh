@@ -45,6 +45,9 @@ case "$SOURCE" in
         DEF_STAGING="${STAGING_DIR:-/work/staging}"
         DEF_LEDGER="${LEDGER_FILE:-/work/processed_ids.txt}"
         DEF_DRY_RUN="${DRY_RUN:-1}"
+        # Real multi-workstream digests regularly exhaust 30 turns (the agent
+        # then never calls finish and the run logs as "unreported").
+        DEF_MAX_LOOPS=60
         ;;
     personal)
         PREFIX="PERSONAL_MAIL"
@@ -61,6 +64,7 @@ case "$SOURCE" in
         DEF_STAGING="/work/staging/personal"
         DEF_LEDGER="/work/personal_processed_ids.txt"
         DEF_DRY_RUN="1"
+        DEF_MAX_LOOPS=30
         ;;
     *)
         echo "run-ingest.sh: unknown source '$SOURCE' (known: digest, personal)." >&2
@@ -94,9 +98,9 @@ LLM_BASE_URL="$(pref LLM_BASE_URL "${LLM_BASE_URL:-}")"
 LLM_API_KEY="$(pref LLM_API_KEY "${LLM_API_KEY:-}")"
 
 # Agent loop budget, tunable per source (DIGEST_MAX_LOOPS / PERSONAL_MAIL_MAX_LOOPS,
-# global INGEST_MAX_LOOPS fallback). Long multi-workstream digests can need more
-# than the built-in default of 30 turns; custom_agent_loop.py reads AGENT_MAX_LOOPS.
-AGENT_MAX_LOOPS="$(pref MAX_LOOPS "${INGEST_MAX_LOOPS:-30}")"
+# global INGEST_MAX_LOOPS fallback, then the per-source default declared above);
+# custom_agent_loop.py reads AGENT_MAX_LOOPS.
+AGENT_MAX_LOOPS="$(pref MAX_LOOPS "${INGEST_MAX_LOOPS:-$DEF_MAX_LOOPS}")"
 
 export VAULT_DIR WORKDIR STAGING_DIR LEDGER_FILE DRY_RUN WATERMARK_FILE \
     LLM_MODEL LLM_BASE_URL LLM_API_KEY AGENT_MAX_LOOPS

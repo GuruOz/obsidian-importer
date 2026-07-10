@@ -1602,7 +1602,7 @@ const envSchema = {
   "DIGEST_SUBJECT_PATTERN": { label: "Subject filter (optional)", category: "Work Digest", type: "text", default: "", desc: "Only subjects matching this pattern count. Leave blank to accept any subject from the sender." },
   "DIGEST_FOLDER": { label: "Mail folder", category: "Work Digest", type: "text", default: "Inbox/CopilotDigest", desc: "The Outlook folder the digest lands in. Use \"Inbox\" if you don't have a rule moving digests into a folder." },
   "DRY_RUN": { label: "Dry run — propose only", category: "Work Digest", type: "toggle", default: "1", desc: "When on, the digest job writes its filing plan to a proposal (see Review Proposals on the left) instead of changing the vault. Turn off to file for real." },
-  "DIGEST_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Work Digest", type: "number", default: "30", desc: "Max tool-calling turns the filing agent gets. Raise (e.g. 60) if long multi-workstream digests run out before finishing. More loops = more tokens." },
+  "DIGEST_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Work Digest", type: "number", default: "60", desc: "Max tool-calling turns the filing agent gets. Real digests regularly exhaust 30 (the run then shows as \"unreported\" in the Filing Log), so 60 is the recommended working value. More loops = more tokens, but only when used." },
 
   // Personal Email
   "PERSONAL_MAIL_DRY_RUN": { label: "Dry run — propose only", category: "Personal Email", type: "toggle", default: "1", desc: "Independent of the work digest's dry run, so one can go live while the other still proposes. Dry runs leave no trace — nothing is marked as processed." },

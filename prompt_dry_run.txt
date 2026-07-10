@@ -19,14 +19,20 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
      when its title doesn't match the digest wording - at most one call per workstream. Use
      grep_search only for exact identifiers (ticket numbers). Do NOT run broad vault-wide
      greps otherwise - the index already gives complete title coverage.
-4. Determine the WORK DATE. If the DATE CONTEXT above specifies one, use it exactly.
-   Otherwise infer it from the digest content itself (each section is headed
-   "Digest received <timestamp>" and the body usually states its own date, in a
-   "Work Log - <DD Mon YYYY>" style line). Propose filing under that date's daily
-   note and use that date in the idempotency marker - not today's date if the work
-   date differs from it.
-5. Check whether <!-- copilot-digest:<work-date> --> already exists in that daily note,
-   and note in your proposal whether this run would be a no-op duplicate.
+4. Determine each section's WORK DATE. The staged digest may contain MORE THAN ONE
+   digest email (sections separated by "---", each headed "## Digest received
+   <timestamp>") and they may describe DIFFERENT days - e.g. yesterday's summary sent
+   late plus today's. For each section, read its own stated date (a "Work Log -
+   <DD Mon YYYY>" style line in the body; if absent, fall back to that section's
+   "Digest received" timestamp converted to local Singapore time). Propose filing each
+   section's content under ITS OWN date's daily note with its own idempotency marker.
+   Never merge two sections with different stated dates under one date, and do not use
+   today's date if a section's work date differs from it. Exception: if the DATE
+   CONTEXT above specifies an explicit work date, it is a manual single-day backfill -
+   use it exactly for the whole batch.
+5. For each section, check whether <!-- copilot-digest:<that-section's-work-date> -->
+   already exists in that date's daily note, and note in your proposal whether that
+   section would be a no-op duplicate.
 6. Split the digest into atomic entries and, for each, decide exactly where it would be
    filed: daily-note section, and which topic/project note (existing or new) it would
    update or create. Actively discover related existing notes via the index and embed `[[Note Title]]` links to inter-connect related concepts, issues, and tickets.
@@ -35,7 +41,8 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    - **WORKSTREAM CONTINUITY RULE**: A recurring workstream - the same initiative, rollout, escalation, or ticket appearing across multiple days (e.g. "Zscaler global classified-file upload block", "Purview agency-rule creation") - should APPEND to its single canonical topic note, not a new note each day. Before proposing CREATE, check all three: (1) recent_filing_log.md, (2) a search_relevant call on the theme, (3) the index's recently-modified notes. Propose CREATE only when none surfaces a match.
    - **NOTE GRANULARITY RULE**: When creating new notes, use highly specific titles that describe the exact issue, task, or incident (e.g. 'RNS policy tips persist after licence removal', NOT generic titles like 'Purview policy tips limitation'). When deciding whether to UPDATE an existing note, you MUST NOT update notes with generic titles (like 'Purview policy tips limitation') just because they share a topic. If the digest introduces a specific scenario, test, or ticket, you MUST CREATE a new specific note rather than appending it to a generic umbrella note. Only update an existing note if it is a direct continuation of that *exact same specific issue or ticket*. (Tiebreaker: same initiative/ticket -> UPDATE the canonical note; a new specific scenario under a broad theme -> CREATE.)
    - **NEW-NOTE TEMPLATE**: For a proposed new note under Work/*/Troubleshooting/ or Work/*/Testing/, follow the vault template: H1 title, `**Date: <Weekday> <Do> <Month> <Year>**`, `##### keywords: ...`, `---`, then `### Who reported it:` / `### Problem statement:` / `### Troubleshooting steps taken:` / `### Solution:`, ending with `### Related` wikilinks. Never propose YAML frontmatter - this vault uses none.
-   - **FILENAME RULE**: Note titles become filenames and wikilink targets. Never use the characters # ^ | [ ] : \ / in a note title (e.g. 'Purview DLP escalation - TrackingID 2606080040000512', NOT '... - TrackingID#2606080040000512'): '#', '^', '|' and brackets are Obsidian link syntax, so links to such notes silently break; ': \ /' are invalid in filenames on some platforms.
+   - **FILENAME RULE**: Note titles become filenames and wikilink targets. Never use the characters # ^ | [ ] : \ / in a note title (e.g. 'Falcon sensor rollout - INC0451234', NOT 'Falcon sensor rollout - INC#0451234'): '#', '^', '|' and brackets are Obsidian link syntax, so links to such notes silently break; ': \ /' are invalid in filenames on some platforms.
+   - **EXACT-TITLE LINK RULE**: When linking to an EXISTING note, copy its title character-for-character from vault_index.txt (or the filename you read) - never retype it from the digest's wording. A one-character difference (a space where the filename has an underscore, a reworded suffix) silently breaks the link. If the digest says "TrackingID 2606080040000512" but the existing note is '... - TrackingID_2606080040000512', the link must use the underscore.
    - **LINK INTEGRITY RULE**: If you write a `[[New Note Title]]` link anywhere, you MUST also output/create that new note file. Never leave a dangling link. When creating the new note, you MUST populate it with relevant operational details and context; do not just leave it blank.
 7. Do NOT use Write or Edit on any file inside the vault. Write your proposal to
    /work/staging/proposed.md - the only file you may write.
@@ -49,5 +56,7 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    between tool calls to a minimum.
 10. Use your available tools (read, glob, grep, write) to perform this task. Do not edit vault files.
 11. When finished, call the finish tool with:
-    {"status": "proposed" | "skipped_duplicate" | "no_content", "work_date": "YYYY-MM-DD", "files_touched": ["/work/staging/proposed.md"], "entries_filed": N}
+    {"status": "proposed" | "skipped_duplicate" | "no_content", "work_dates": ["YYYY-MM-DD", ...], "files_touched": ["/work/staging/proposed.md"], "entries_filed": N}
+    - work_dates lists every work date the proposal files under (usually one; more
+      when the batch contained digests for different days).
 

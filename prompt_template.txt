@@ -18,15 +18,21 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
      workstream when its title doesn't match the digest wording - at most one call per
      workstream. Use grep_search only for exact identifiers (ticket numbers). Do NOT run
      broad vault-wide greps otherwise - the index already gives complete title coverage.
-4. Determine the WORK DATE. If the DATE CONTEXT above specifies one, use it exactly.
-   Otherwise infer it from the digest content itself (each section is headed
-   "Digest received <timestamp>" and the body usually states its own date, in a
-   "Work Log - <DD Mon YYYY>" style line). File everything under that date's daily
-   note - creating it if absent - and use that date in the idempotency marker. Do
-   not use today's date if the work date differs from it.
-5. Before writing anything, check whether <!-- copilot-digest:<work-date> --> already
-   exists in that daily note. If it does, make no changes and report that in your
-   summary. Otherwise, add the marker as part of this run.
+4. Determine each section's WORK DATE. The staged digest may contain MORE THAN ONE
+   digest email (sections separated by "---", each headed "## Digest received
+   <timestamp>") and they may describe DIFFERENT days - e.g. yesterday's summary sent
+   late plus today's. For each section, read its own stated date (a "Work Log -
+   <DD Mon YYYY>" style line in the body; if absent, fall back to that section's
+   "Digest received" timestamp converted to local Singapore time). File each section's
+   content under ITS OWN date's daily note - creating it if absent - with its own
+   idempotency marker. Never merge two sections with different stated dates under one
+   date, and do not use today's date if a section's work date differs from it.
+   Exception: if the DATE CONTEXT above specifies an explicit work date, it is a
+   manual single-day backfill - use it exactly for the whole batch.
+5. Before writing anything for a section, check whether
+   <!-- copilot-digest:<that-section's-work-date> --> already exists in that date's
+   daily note. If it does, skip that section (report it in your summary) but still
+   process the other sections. Otherwise, add the marker as part of this run.
 6. PLAN BEFORE WRITING: before you write to any vault file, write a filing plan to
    /work/staging/plan.md - one line per digest workstream/section: the target note path,
    CREATE or UPDATE, and a one-line reason. Only then execute the plan. If execution has
@@ -40,12 +46,15 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
    - **WORKSTREAM CONTINUITY RULE**: A recurring workstream - the same initiative, rollout, escalation, or ticket appearing across multiple days (e.g. "Zscaler global classified-file upload block", "Purview agency-rule creation") - must APPEND to its single canonical topic note, not spawn a new note each day. Before deciding CREATE, you MUST check all three: (1) recent_filing_log.md, (2) a search_relevant call on the workstream's theme, (3) the index's recently-modified notes. Only CREATE when none of them surfaces a matching note.
    - **NOTE GRANULARITY RULE**: When creating new notes, use highly specific titles that describe the exact issue, task, or incident (e.g. 'RNS policy tips persist after licence removal', NOT generic titles like 'Purview policy tips limitation'). When deciding whether to UPDATE an existing note, you MUST NOT update notes with generic titles (like 'Purview policy tips limitation') just because they share a topic. If the digest introduces a specific scenario, test, or ticket, you MUST CREATE a new specific note rather than appending it to a generic umbrella note. Only update an existing note if it is a direct continuation of that *exact same specific issue or ticket*. (Tiebreaker with the rule above: same initiative/ticket -> UPDATE its canonical note; a genuinely new specific scenario under a broad theme -> CREATE.)
    - **NEW-NOTE TEMPLATE**: A new note under Work/*/Troubleshooting/ or Work/*/Testing/ must follow the vault's template shape: an H1 title line, a `**Date: <Weekday> <Do> <Month> <Year>**` line, a `##### keywords: <comma-separated people, systems, tickets>` line, a `---` rule, then the sections `### Who reported it:` / `### Problem statement:` / `### Troubleshooting steps taken:` / `### Solution:`, ending with a `### Related` section that wikilinks the work-date daily note and any sibling topic notes. Never add YAML frontmatter to any note - this vault uses none.
-   - **FILENAME RULE**: Note titles become filenames and wikilink targets. Never use the characters # ^ | [ ] : \ / in a note title (e.g. 'Purview DLP escalation - TrackingID 2606080040000512', NOT '... - TrackingID#2606080040000512'): '#', '^', '|' and brackets are Obsidian link syntax, so links to such notes silently break; ': \ /' are invalid in filenames on some platforms.
+   - **FILENAME RULE**: Note titles become filenames and wikilink targets. Never use the characters # ^ | [ ] : \ / in a note title (e.g. 'Falcon sensor rollout - INC0451234', NOT 'Falcon sensor rollout - INC#0451234'): '#', '^', '|' and brackets are Obsidian link syntax, so links to such notes silently break; ': \ /' are invalid in filenames on some platforms.
+   - **EXACT-TITLE LINK RULE**: When linking to an EXISTING note, copy its title character-for-character from vault_index.txt (or the filename you read) - never retype it from the digest's wording. A one-character difference (a space where the filename has an underscore, a reworded suffix) silently breaks the link. If the digest says "TrackingID 2606080040000512" but the existing note is '... - TrackingID_2606080040000512', the link must use the underscore.
    - **LINK INTEGRITY RULE**: If you write a `[[New Note Title]]` link anywhere, you MUST also output/create that new note file. Never leave a dangling link. When creating the new note, you MUST populate it with relevant operational details and context; do not just leave it blank.
 9. Append only. Never rewrite, reorder, or delete existing content in any note.
 10. Work efficiently: don't re-read files you've already read, batch independent edits,
    and keep commentary between tool calls to a minimum.
 11. Use your available tools (read, glob, grep, edit, write, search_relevant) to perform this task.
 12. When finished, call the finish tool with:
-    {"status": "filed" | "skipped_duplicate" | "no_content", "work_date": "YYYY-MM-DD", "files_touched": [...], "entries_filed": N}
+    {"status": "filed" | "skipped_duplicate" | "no_content", "work_dates": ["YYYY-MM-DD", ...], "files_touched": [...], "entries_filed": N}
+    - work_dates lists every work date you filed under (usually one; more when the
+      batch contained digests for different days).
 
