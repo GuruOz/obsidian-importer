@@ -8,11 +8,11 @@
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; height: 100vh;
+    margin: 0; height: 100vh; height: 100dvh;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: #1e1e1e; color: #e8e8e8;
   }
-  #app { display: flex; height: 100vh; }
+  #app { display: flex; height: 100vh; height: 100dvh; }
   #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   header { padding: 0.6rem 1rem; border-bottom: 1px solid #333; font-weight: 600;
            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
@@ -214,6 +214,19 @@
   .tok-com { color: #808080; font-style: italic; }
   .tok-num { color: #f2b06e; }
 
+  /* --- view layout (moved from inline attrs so the mobile breakpoint can override) --- */
+  #tabs { flex: 1; display: flex; gap: 1rem; align-items: center; margin-left: 1rem; min-width: 0; }
+  #view-settings { flex: 1; flex-direction: row; min-height: 0; }
+  #settings-sidebar { width: 240px; flex-shrink: 0; border-right: 1px solid #333; overflow-y: auto; }
+  #settings-editor-container { flex: 1; display: flex; flex-direction: column; padding: 1rem; overflow-y: auto; min-width: 0; }
+  #settings-form { flex: 1; flex-direction: column; max-width: 800px; }
+  #ingest-panel { flex: 1; flex-direction: column; max-width: 800px; min-height: 0; }
+  #view-logs { flex: 1; flex-direction: row; min-height: 0; }
+  #logs-sidebar { width: 280px; flex-shrink: 0; border-right: 1px solid #333; overflow-y: auto; }
+  #view-simulator { flex: 1; flex-direction: row; min-height: 0; overflow: hidden; }
+  #sim-left { flex: 1; display: flex; flex-direction: column; padding: 1.5rem; border-right: 1px solid #333; overflow-y: auto; min-width: 0; }
+  #sim-right { flex: 1; display: flex; flex-direction: column; padding: 1.5rem; overflow-y: auto; background: #1a1a1a; min-width: 0; }
+
   @media (prefers-color-scheme: light) {
     body { background: #fafafa; color: #1a1a1a; }
     header { border-color: #ddd; }
@@ -235,6 +248,8 @@
     .settings-item:hover { background: #e2e2e2; }
     .settings-item.active { background: #dcdcdc; color: #000; }
     #settings-sidebar { background: #f0f0f0; border-color: #ddd; }
+    #logs-sidebar, #sim-left { border-color: #ddd; }
+    #sim-right { background: #f0f0f0; }
     #settings-textarea { background: #fff; color: #1a1a1a; border-color: #ccc; }
     .settings-section { background: #fff; border-color: #e2e2e2; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .settings-section-title { color: #111; border-color: #eee; }
@@ -280,6 +295,57 @@
     .msg-copy, .regen-btn, .retry-btn { background: #e0e0e0; color: #333; border-color: #ccc; }
     .regen-btn:hover, .retry-btn:hover, #scroll-down:hover { background: #d8d8d8; }
   }
+
+  /* --- touch: hover-gated controls need to stay visible without a mouse --- */
+  @media (hover: none) {
+    .sess-act { display: flex; }
+    .sess-act button { padding: 0.15rem 0.4rem; font-size: 1rem; }
+    .msg-copy { opacity: 0.7; }
+  }
+
+  /* --- mobile layout --- */
+  @media (max-width: 700px) {
+    header { flex-wrap: wrap; padding: 0.5rem 0.75rem; }
+    #tabs {
+      flex: 1 1 100%; order: 10; margin-left: 0; gap: 0.25rem;
+      overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+    }
+    #tabs::-webkit-scrollbar { display: none; }
+    .tab { white-space: nowrap; padding: 0.4rem 0.5rem; }
+
+    #sidebar {
+      position: fixed; left: 0; top: 0; bottom: 0; height: 100dvh;
+      width: min(80vw, 300px); z-index: 30;
+      box-shadow: 4px 0 18px rgba(0,0,0,0.45);
+    }
+
+    .msg { max-width: 92%; }
+    #log { padding: 0.75rem; }
+    form { padding: 0.5rem; }
+    #send { padding: 0.6rem 0.9rem; }
+    #scroll-down { right: 0.75rem; }
+    #sess-search, .form-input, .form-select { font-size: 16px; }
+
+    #view-settings { flex-direction: column; }
+    #settings-sidebar {
+      width: 100%; max-height: 38vh; flex-shrink: 0;
+      border-right: none; border-bottom: 1px solid #333;
+    }
+    #settings-editor-container { padding: 0.75rem; }
+    .settings-section { padding: 0.9rem; }
+
+    #view-logs { flex-direction: column; }
+    #logs-sidebar {
+      width: 100%; max-height: 30vh; flex-shrink: 0;
+      border-right: none; border-bottom: 1px solid #333;
+    }
+
+    #view-simulator { flex-direction: column; overflow-y: auto; }
+    #sim-left, #sim-right { flex: none; overflow-y: visible; border-right: none; }
+    #sim-left { border-bottom: 1px solid #333; padding: 1rem; }
+    #sim-right { padding: 1rem; }
+    #sim-input { min-height: 40vh; }
+  }
 </style>
 </head>
 <body>
@@ -292,7 +358,7 @@
 <div id="main">
 <header>
   <button id="sb-toggle" type="button" title="Toggle history sidebar">&#9776;</button>
-  <div id="tabs" style="flex: 1; display: flex; gap: 1rem; align-items: center; margin-left: 1rem;">
+  <div id="tabs">
     <span class="tab active" data-view="view-chat">Chat</span>
     <span class="tab" data-view="view-settings">Settings</span>
     <span class="tab" data-view="view-logs">Logs</span>
@@ -318,8 +384,8 @@
     <button id="send" type="submit">Send</button>
   </form>
 </div>
-<div id="view-settings" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
-  <div id="settings-sidebar" style="width: 240px; border-right: 1px solid #333; overflow-y: auto;">
+<div id="view-settings" class="view" style="display:none;">
+  <div id="settings-sidebar">
     <div class="settings-nav-title">Actions</div>
     <div id="ingest-action" class="settings-item">Run Email Ingestion</div>
     <div class="settings-nav-title">Settings</div>
@@ -330,10 +396,10 @@
     <div class="settings-nav-title">Advanced</div>
     <div id="settings-list" style="display: flex; flex-direction: column;"></div>
   </div>
-  <div id="settings-editor-container" style="flex:1; display:flex; flex-direction:column; padding: 1rem; overflow-y:auto;">
+  <div id="settings-editor-container">
     <textarea id="settings-textarea" spellcheck="false" style="flex:1; font-family: monospace; font-size: 0.9rem; background: #2a2a2a; color: #e8e8e8; border: 1px solid #444; padding: 0.75rem; resize: none; border-radius: 8px;"></textarea>
-    <div id="settings-form" style="display:none; flex:1; flex-direction:column; max-width: 800px;"></div>
-    <div id="ingest-panel" style="display:none; flex:1; flex-direction:column; max-width: 800px; min-height: 0;">
+    <div id="settings-form" style="display:none;"></div>
+    <div id="ingest-panel" style="display:none;">
       <div class="settings-section">
         <div class="settings-section-title" id="ingest-title">Run Ingestion</div>
         <div class="form-group">
@@ -425,8 +491,8 @@
     </div>
   </div>
 </div>
-<div id="view-logs" class="view" style="display:none; flex:1; flex-direction:row; min-height:0;">
-  <div id="logs-sidebar" style="width: 280px; border-right: 1px solid #333; overflow-y: auto;">
+<div id="view-logs" class="view" style="display:none;">
+  <div id="logs-sidebar">
     <div style="padding: 0.75rem 1rem 0.4rem; font-size: 0.78rem; font-weight: 600; color: #888; text-transform: uppercase;">Pipeline Logs</div>
     <div id="logs-list" style="display: flex; flex-direction: column;"></div>
   </div>
@@ -464,8 +530,8 @@
   </div>
   <iframe id="obsidian-iframe" style="width:100%; height:100%; border:none;"></iframe>
 </div>
-<div id="view-simulator" class="view" style="display:none; flex:1; flex-direction:row; min-height:0; overflow: hidden;">
-  <div style="flex: 1; display: flex; flex-direction: column; padding: 1.5rem; border-right: 1px solid #333; overflow-y: auto;">
+<div id="view-simulator" class="view" style="display:none;">
+  <div id="sim-left">
     <h2 style="margin-top: 0;">Email Simulator</h2>
     <p style="color: #bbb; font-size: 0.9rem; margin-bottom: 1.5rem;">Paste a sample email here to run a dry-run through the LLM pipeline. This does not write to your live vault.</p>
     
@@ -488,7 +554,7 @@
       <span id="sim-status" style="color: #888; font-size: 0.9rem;"></span>
     </div>
   </div>
-  <div style="flex: 1; display: flex; flex-direction: column; padding: 1.5rem; overflow-y: auto; background: #1a1a1a;">
+  <div id="sim-right">
     <h3 style="margin-top: 0; color: #fff;">Proposed Output</h3>
     <div id="sim-output-proposed" class="msg-content" style="background: #222; padding: 1rem; border-radius: 8px; border: 1px solid #333; min-height: 200px; color: #eee; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; overflow-y: auto;"></div>
     
@@ -912,6 +978,8 @@ async function deleteSession(id) {
   refreshSidebar();
 }
 
+const MOBILE = window.matchMedia("(max-width: 700px)");
+
 sessList.addEventListener("click", (e) => {
   const item = e.target.closest(".sess");
   if (!item) return;
@@ -920,6 +988,7 @@ sessList.addEventListener("click", (e) => {
   if (e.target.closest(".sess-del")) { deleteSession(item.dataset.id); return; }
   if (e.target.closest(".sess-edit")) return;
   switchSession(item.dataset.id);
+  if (MOBILE.matches) sidebar.classList.add("collapsed");
 });
 
 document.getElementById("sb-toggle").addEventListener("click", () => {
@@ -927,7 +996,7 @@ document.getElementById("sb-toggle").addEventListener("click", () => {
   localStorage.setItem("vault_qa_sidebar",
                        sidebar.classList.contains("collapsed") ? "0" : "1");
 });
-if (localStorage.getItem("vault_qa_sidebar") === "0") sidebar.classList.add("collapsed");
+if (localStorage.getItem("vault_qa_sidebar") === "0" || MOBILE.matches) sidebar.classList.add("collapsed");
 
 // --- new chat (button + Ctrl/Cmd+K) ---
 function newChat() {
@@ -1503,7 +1572,7 @@ document.querySelectorAll('.tab').forEach(t => {
     if (!isChat) {
       document.getElementById('sidebar').classList.add('collapsed');
     } else {
-      if (localStorage.getItem("vault_qa_sidebar") !== "0") {
+      if (localStorage.getItem("vault_qa_sidebar") !== "0" && !MOBILE.matches) {
         document.getElementById('sidebar').classList.remove('collapsed');
       }
     }
