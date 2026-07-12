@@ -8,6 +8,7 @@ from datetime import datetime
 
 import custom_agent_loop as cal
 import lexical_index
+from tzutil import APP_TZ, TZ_NAME, now_local
 
 READONLY_TOOL_NAMES = {"read_file", "glob_search", "grep_search"}
 
@@ -85,7 +86,7 @@ def _index_lines(index, now):
     lines = []
     for path, mtime in index:
         if mtime and mtime >= cutoff:
-            lines.append(f"{path}  [modified {datetime.fromtimestamp(mtime):%Y-%m-%d}]")
+            lines.append(f"{path}  [modified {datetime.fromtimestamp(mtime, APP_TZ):%Y-%m-%d}]")
         else:
             lines.append(path)
     return lines
@@ -107,9 +108,9 @@ def build_system_prompt(index, lexical_index=None):
         " search_relevant for thematic/paraphrased questions, and"
         if lexical_index is not None else ""
     )
-    now = datetime.now()
+    now = now_local()
     return (
-        f"Current date/time: {now:%Y-%m-%d %H:%M} ({now:%A}), timezone Asia/Singapore "
+        f"Current date/time: {now:%Y-%m-%d %H:%M} ({now:%A}), timezone {TZ_NAME} "
         "(as of this session's start). Use it to resolve relative dates like "
         "\"today\", \"last week\", \"this month\".\n\n"
         "You are a read-only research assistant for a personal Obsidian vault. "

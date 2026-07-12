@@ -26,6 +26,7 @@ import lexical_index
 import semantic_index
 import session_store as store
 import vault_qa
+from tzutil import APP_TZ
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 PORT = int(os.environ.get("VAULT_QA_PORT", "8420"))
@@ -271,12 +272,18 @@ EDITABLE_FILES = [
     "prompt_vault_profile.txt",
     "prompt_weekly_rollup.txt",
     "prompt_personal_email.txt",
-    "prompt_personal_email_dry_run.txt"
+    "prompt_personal_email_dry_run.txt",
+    "prompt_telegram.txt",
+    "prompt_telegram_dry_run.txt",
+    "prompt_whatsapp.txt",
+    "prompt_whatsapp_dry_run.txt"
 ]
 
 PROPOSED_FILES = [
     "data/staging/proposed.md",
-    "data/staging/personal/proposed.md"
+    "data/staging/personal/proposed.md",
+    "data/staging/telegram/proposed.md",
+    "data/staging/whatsapp/proposed.md"
 ]
 
 @app.route("/api/settings")
@@ -417,6 +424,8 @@ INGEST_MAX_PASSES = 20    # drain-mode safety cap (25 emails/pass -> 500 emails)
 INGEST_SOURCES = {
     "personal": {"title": "Personal Email"},
     "digest": {"title": "Work Digest"},
+    "telegram": {"title": "Telegram"},
+    "whatsapp": {"title": "WhatsApp"},
 }
 
 # Single manual-ingestion run at a time, across BOTH sources - run-ingest.sh
@@ -564,9 +573,11 @@ def _start_ingest(source, env_overrides, max_passes):
     return jsonify({"ok": True})
 
 
-def _ingest_personal_body(body):
-    """Validate a personal-ingest request -> (env_overrides, max_passes) or an
-    (error_response, status) tuple."""
+def _window_ingest_body(prefix, body):
+    """Validate a watermark/window ingest request (personal email or a chat
+    source) -> (env_overrides, max_passes) or an (error_response, status) tuple.
+    All such sources share the same options - lookback / explicit date window /
+    drain / dry-run - differing only in their env-var PREFIX."""
     lookback = body.get("lookback_days")
     if lookback is not None:
         if not isinstance(lookback, int) or isinstance(lookback, bool) or lookback < 0:
@@ -574,11 +585,13 @@ def _ingest_personal_body(body):
     start_date = body.get("start_date")
     end_date = body.get("end_date")
     for label, value in (("start_date", start_date), ("end_date", end_date)):
-        if value is not None and not _valid_date(value):
+        # Telegram accepts the sentinel "all" for a full-history backfill.
+        if value is not None and value != "all" and not _valid_date(value):
             return jsonify({"error": f"{label} must be a YYYY-MM-DD string"}), 400
     if end_date is not None and start_date is None:
         return jsonify({"error": "end_date requires start_date"}), 400
-    if start_date is not None and end_date is not None and end_date < start_date:
+    if (start_date is not None and end_date is not None
+            and start_date != "all" and end_date != "all" and end_date < start_date):
         return jsonify({"error": "end_date must not be before start_date"}), 400
     if start_date is not None and lookback is not None:
         return jsonify({"error": "use either lookback_days or start_date/end_date, not both"}), 400
@@ -588,17 +601,29 @@ def _ingest_personal_body(body):
 
     env_overrides = []
     if lookback is not None:
-        env_overrides.append(f"PERSONAL_MAIL_LOOKBACK_DAYS={lookback}")
+        env_overrides.append(f"{prefix}_LOOKBACK_DAYS={lookback}")
     if start_date is not None:
-        env_overrides.append(f"PERSONAL_MAIL_START_DATE={start_date}")
+        env_overrides.append(f"{prefix}_START_DATE={start_date}")
     if end_date is not None:
-        env_overrides.append(f"PERSONAL_MAIL_END_DATE={end_date}")
+        env_overrides.append(f"{prefix}_END_DATE={end_date}")
     if dry_run is not None:
-        env_overrides.append(f"PERSONAL_MAIL_DRY_RUN={1 if dry_run else 0}")
+        env_overrides.append(f"{prefix}_DRY_RUN={1 if dry_run else 0}")
     max_passes = INGEST_MAX_PASSES if body.get("drain", True) else 1
     if dry_run:
         max_passes = 1  # dry runs never advance state; draining would repeat the batch
     return env_overrides, max_passes
+
+
+def _ingest_personal_body(body):
+    return _window_ingest_body("PERSONAL_MAIL", body)
+
+
+def _ingest_telegram_body(body):
+    return _window_ingest_body("TELEGRAM", body)
+
+
+def _ingest_whatsapp_body(body):
+    return _window_ingest_body("WHATSAPP", body)
 
 
 def _ingest_digest_body(body):
@@ -633,7 +658,12 @@ def ingest_source(source):
     if source not in INGEST_SOURCES:
         return jsonify({"error": f"unknown source '{source}'"}), 404
     body = request.get_json(force=True, silent=True) or {}
-    parser = _ingest_personal_body if source == "personal" else _ingest_digest_body
+    parser = {
+        "personal": _ingest_personal_body,
+        "digest": _ingest_digest_body,
+        "telegram": _ingest_telegram_body,
+        "whatsapp": _ingest_whatsapp_body,
+    }[source]
     result = parser(body)
     # Parsers return (env_overrides:list, max_passes:int) on success, or a Flask
     # (error_response, status_code) tuple on a bad request.
@@ -663,7 +693,8 @@ def ingest_stop(source):
         # that's fine - the worker also checks stop_requested between passes.
         # Covers both fetchers and both wrappers so either source can be stopped.
         "Cmd": ["pkill", "-TERM", "-f",
-                "run-ingest.sh|run-digest.sh|fetch_inbox.py|fetch_digest.py|custom_agent_loop.py"],
+                "run-ingest.sh|run-digest.sh|fetch_inbox.py|fetch_digest.py|"
+                "fetch_telegram.py|fetch_whatsapp.py|custom_agent_loop.py"],
     })
     try:
         exec_id = json.loads(create.stdout).get("Id")
@@ -680,6 +711,261 @@ def ingest_stop(source):
 def ingest_status(source=None):
     with INGEST_LOCK:
         return jsonify(dict(INGEST_STATE))
+
+
+# --- Telegram login (dashboard-driven Telethon sign-in) --------------------
+# vault-qa reaches the repo at /host, so the session file it writes here
+# (/host/data/telegram/telegram.session) is the same host file the pipeline
+# container reads at /work/telegram/telegram.session. All Telethon calls run on
+# one dedicated worker thread so the client's asyncio loop keeps a single owner
+# across the multi-step (phone -> code -> password) flow.
+import concurrent.futures  # noqa: E402
+
+_TG_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-login")
+TELEGRAM_LOGIN_LOCK = threading.Lock()
+TELEGRAM_LOGIN = {"phone": None, "phone_code_hash": None, "client": None}
+
+
+def _tg_run(fn):
+    return _TG_EXECUTOR.submit(fn).result()
+
+
+def _telegram_paths():
+    base = os.path.join(HOST_DIR, "data", "telegram")
+    return os.path.join(base, "telegram.session"), os.path.join(base, "chats.json"), base
+
+
+def _telegram_creds():
+    try:
+        api_id = int(os.environ.get("TELEGRAM_API_ID", "0") or "0")
+    except ValueError:
+        api_id = 0
+    return api_id, os.environ.get("TELEGRAM_API_HASH", "")
+
+
+def _telegram_client():
+    from telethon.sync import TelegramClient
+    api_id, api_hash = _telegram_creds()
+    session, _, base = _telegram_paths()
+    os.makedirs(base, exist_ok=True)
+    return TelegramClient(session, api_id, api_hash)
+
+
+def _me_name(me):
+    return " ".join(filter(None, [getattr(me, "first_name", ""), getattr(me, "last_name", "")])) \
+        or getattr(me, "username", None) or str(getattr(me, "id", ""))
+
+
+def _tg_dump_chats(client):
+    import fetch_telegram as ft
+    _, chats_json, base = _telegram_paths()
+    os.makedirs(base, exist_ok=True)
+    rows = []
+    for d in client.iter_dialogs():
+        rows.append({"id": d.id, "title": d.name or "",
+                     "username": getattr(d.entity, "username", None),
+                     "type": ft.dialog_type(d)})
+    with open(chats_json, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+
+
+@app.route("/api/telegram/status")
+def telegram_status():
+    api_id, api_hash = _telegram_creds()
+    if not api_id or not api_hash:
+        return jsonify({"configured": False, "authorized": False,
+                        "error": "Set TELEGRAM_API_ID and TELEGRAM_API_HASH in Settings first."})
+
+    def op():
+        client = _telegram_client()
+        client.connect()
+        try:
+            authorized = client.is_user_authorized()
+            info = {"configured": True, "authorized": authorized}
+            if authorized:
+                info["name"] = _me_name(client.get_me())
+            return info
+        finally:
+            client.disconnect()
+    try:
+        return jsonify(_tg_run(op))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"configured": True, "authorized": False, "error": str(e)})
+
+
+@app.route("/api/telegram/login/start", methods=["POST"])
+def telegram_login_start():
+    body = request.get_json(force=True, silent=True) or {}
+    phone = (body.get("phone") or "").strip()
+    if not phone:
+        return jsonify({"error": "phone is required (international format, e.g. +6591234567)"}), 400
+
+    def op():
+        client = _telegram_client()
+        client.connect()
+        if client.is_user_authorized():
+            client.disconnect()
+            return {"already_authorized": True}
+        sent = client.send_code_request(phone)
+        with TELEGRAM_LOGIN_LOCK:
+            old = TELEGRAM_LOGIN.get("client")
+            if old is not None:
+                try:
+                    old.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+            TELEGRAM_LOGIN.update(phone=phone, phone_code_hash=sent.phone_code_hash, client=client)
+        return {"ok": True, "code_sent": True}
+    try:
+        return jsonify(_tg_run(op))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/telegram/login/code", methods=["POST"])
+def telegram_login_code():
+    body = request.get_json(force=True, silent=True) or {}
+    code = (body.get("code") or "").strip()
+    with TELEGRAM_LOGIN_LOCK:
+        phone = TELEGRAM_LOGIN.get("phone")
+        pch = TELEGRAM_LOGIN.get("phone_code_hash")
+        client = TELEGRAM_LOGIN.get("client")
+    if not phone or not pch or client is None:
+        return jsonify({"error": "no login in progress; enter your phone number first"}), 400
+    if not code:
+        return jsonify({"error": "code is required"}), 400
+
+    def op():
+        from telethon.errors import SessionPasswordNeededError
+        try:
+            client.sign_in(phone=phone, code=code, phone_code_hash=pch)
+        except SessionPasswordNeededError:
+            return {"needs_password": True}
+        name = _me_name(client.get_me())
+        _tg_dump_chats(client)
+        client.disconnect()
+        with TELEGRAM_LOGIN_LOCK:
+            TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
+        return {"ok": True, "authorized": True, "name": name}
+    try:
+        return jsonify(_tg_run(op))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/telegram/login/password", methods=["POST"])
+def telegram_login_password():
+    body = request.get_json(force=True, silent=True) or {}
+    password = body.get("password") or ""
+    with TELEGRAM_LOGIN_LOCK:
+        client = TELEGRAM_LOGIN.get("client")
+    if client is None:
+        return jsonify({"error": "no login in progress; enter your phone number first"}), 400
+    if not password:
+        return jsonify({"error": "password is required"}), 400
+
+    def op():
+        client.sign_in(password=password)
+        name = _me_name(client.get_me())
+        _tg_dump_chats(client)
+        client.disconnect()
+        with TELEGRAM_LOGIN_LOCK:
+            TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
+        return {"ok": True, "authorized": True, "name": name}
+    try:
+        return jsonify(_tg_run(op))
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/api/telegram/chats")
+def telegram_chats():
+    _, chats_json, _ = _telegram_paths()
+    if not os.path.exists(chats_json):
+        return jsonify({"chats": [], "note": "No chats discovered yet - log in, then run a "
+                        "Telegram ingest (or the login itself refreshes this list)."})
+    try:
+        with open(chats_json, "r", encoding="utf-8") as f:
+            return jsonify({"chats": json.load(f)})
+    except (OSError, ValueError) as e:
+        return jsonify({"chats": [], "error": str(e)})
+
+
+# --- WhatsApp bridge status/QR/chats (the bridge itself is the Node service;
+# these routes just surface the files it writes under /host/data/whatsapp) ----
+WHATSAPP_BRIDGE_CONTAINER = "copilot-digest-whatsapp-bridge"
+
+
+def _whatsapp_dir():
+    return os.path.join(HOST_DIR, "data", "whatsapp")
+
+
+@app.route("/api/whatsapp/status")
+def whatsapp_status():
+    path = os.path.join(_whatsapp_dir(), "status.json")
+    if not os.path.exists(path):
+        return jsonify({"state": "unknown",
+                        "error": "bridge not started yet (docker compose up -d whatsapp-bridge)"})
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except (OSError, ValueError) as e:
+        return jsonify({"state": "unknown", "error": str(e)})
+
+
+@app.route("/api/whatsapp/qr")
+def whatsapp_qr():
+    path = os.path.join(_whatsapp_dir(), "qr.png")
+    if not os.path.exists(path):
+        return jsonify({"error": "no QR available (already paired, or bridge not waiting)"}), 404
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return Response(data, mimetype="image/png",
+                    headers={"Cache-Control": "no-store, must-revalidate"})
+
+
+@app.route("/api/whatsapp/chats")
+def whatsapp_chats():
+    path = os.path.join(_whatsapp_dir(), "chats.json")
+    if not os.path.exists(path):
+        return jsonify({"chats": [], "note": "No chats discovered yet - pair WhatsApp and let "
+                        "the history sync run."})
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return jsonify({"chats": json.load(f)})
+    except (OSError, ValueError) as e:
+        return jsonify({"chats": [], "error": str(e)})
+
+
+@app.route("/api/whatsapp/repair", methods=["POST"])
+def whatsapp_repair():
+    """Log out the current WhatsApp link and force a fresh QR: move the auth dir
+    aside and restart the bridge, which then has no creds and emits a new QR."""
+    auth_dir = os.path.join(_whatsapp_dir(), "auth")
+    if os.path.isdir(auth_dir):
+        stamp = now_ts_label()
+        try:
+            os.rename(auth_dir, auth_dir + f".bak-{stamp}")
+        except OSError as e:
+            return jsonify({"error": f"could not move auth dir: {e}"}), 500
+    # Clear stale QR/status so the UI doesn't briefly show the old state.
+    for name in ("qr.png", "status.json"):
+        p = os.path.join(_whatsapp_dir(), name)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
+    _docker_api("POST", f"/containers/{WHATSAPP_BRIDGE_CONTAINER}/restart")
+    return jsonify({"ok": True})
+
+
+def now_ts_label():
+    from tzutil import now_local
+    return now_local().strftime("%Y%m%d-%H%M%S")
 
 
 @app.route("/api/system/restart", methods=["POST"])
@@ -966,7 +1252,7 @@ def simulator_email():
                         except OSError:
                             mtime = 0
                         # Same "YYYY-MM-DD<TAB>path" format run-ingest.sh writes.
-                        index_lines.append((rel, f"{datetime.fromtimestamp(mtime):%Y-%m-%d}\t{rel}"))
+                        index_lines.append((rel, f"{datetime.fromtimestamp(mtime, APP_TZ):%Y-%m-%d}\t{rel}"))
             with open(vault_index, "w", encoding="utf-8") as f:
                 f.write("\n".join(line for _, line in sorted(index_lines)))
         except Exception as e:

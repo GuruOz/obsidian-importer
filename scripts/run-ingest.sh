@@ -40,6 +40,7 @@ case "$SOURCE" in
         STAGED_FILE="digest.md"
         ARCHIVE_SUBDIR="Raw Digests"
         ARCHIVE_LABEL="Copilot Digest"
+        AUTH_HINT="run graph_auth.py again"
         # Digest preserves its historical paths, inheriting the unprefixed globals
         # (and the global DRY_RUN) so the existing .env keeps working untouched.
         DEF_STAGING="${STAGING_DIR:-/work/staging}"
@@ -65,9 +66,41 @@ case "$SOURCE" in
         DEF_LEDGER="/work/personal_processed_ids.txt"
         DEF_DRY_RUN="1"
         DEF_MAX_LOOPS=30
+        AUTH_HINT="run graph_auth.py again"
+        ;;
+    telegram)
+        PREFIX="TELEGRAM"
+        SRC_TITLE="Telegram"
+        FETCHER="fetch_telegram.py"
+        PROMPT_LIVE="/app/prompt_telegram.txt"
+        PROMPT_DRY="/app/prompt_telegram_dry_run.txt"
+        STAGED_FILE="telegram.md"
+        ARCHIVE_SUBDIR="Raw Chats"
+        ARCHIVE_LABEL="Telegram"
+        DEF_STAGING="/work/staging/telegram"
+        DEF_LEDGER="/work/telegram_processed_ids.txt"
+        DEF_DRY_RUN="1"
+        # Busy group days can span many chat-day sections; give the agent room.
+        DEF_MAX_LOOPS=60
+        AUTH_HINT="log in to Telegram from the dashboard (or run telegram_login.py)"
+        ;;
+    whatsapp)
+        PREFIX="WHATSAPP"
+        SRC_TITLE="WhatsApp"
+        FETCHER="fetch_whatsapp.py"
+        PROMPT_LIVE="/app/prompt_whatsapp.txt"
+        PROMPT_DRY="/app/prompt_whatsapp_dry_run.txt"
+        STAGED_FILE="whatsapp.md"
+        ARCHIVE_SUBDIR="Raw Chats"
+        ARCHIVE_LABEL="WhatsApp"
+        DEF_STAGING="/work/staging/whatsapp"
+        DEF_LEDGER="/work/whatsapp_processed_ids.txt"
+        DEF_DRY_RUN="1"
+        DEF_MAX_LOOPS=60
+        AUTH_HINT="re-pair WhatsApp from the dashboard"
         ;;
     *)
-        echo "run-ingest.sh: unknown source '$SOURCE' (known: digest, personal)." >&2
+        echo "run-ingest.sh: unknown source '$SOURCE' (known: digest, personal, telegram, whatsapp)." >&2
         exit 1
         ;;
 esac
@@ -174,8 +207,8 @@ if [ "$FETCH_RC" -eq 20 ]; then
     "$NOTIFY" "$SRC_TITLE" "Nothing new to ingest - nothing to file." default
     exit 0
 elif [ "$FETCH_RC" -eq 30 ]; then
-    log "ERROR: Graph auth failed (exit 30). Re-run graph_auth.py."
-    "$NOTIFY" "$SRC_TITLE FAILED" "Graph auth expired/missing - run graph_auth.py again." high x
+    log "ERROR: auth failed (exit 30). Fix: ${AUTH_HINT}."
+    "$NOTIFY" "$SRC_TITLE FAILED" "Auth expired/missing - ${AUTH_HINT}." high x
     exit 1
 elif [ "$FETCH_RC" -ne 0 ]; then
     log "ERROR: ${FETCHER} failed with exit $FETCH_RC"

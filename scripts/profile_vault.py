@@ -21,7 +21,8 @@ import os
 import random
 import subprocess
 import sys
-from datetime import datetime, timezone
+
+from tzutil import now_local
 
 EXCLUDE_DIR_PREFIXES = (".",)  # .obsidian, .trash, .git, etc.
 EXCLUDE_FILENAMES = {"Filing_Rules.md"}
@@ -118,7 +119,7 @@ def write_profile(staging_dir, tree_lines, sampled, total_candidates, max_chars)
     profile_path = os.path.join(staging_dir, "vault_profile.md")
 
     lines = [
-        f"# Vault Profile (generated {datetime.now(timezone.utc).isoformat()})",
+        f"# Vault Profile (generated {now_local().isoformat()})",
         "",
         "## Folder tree",
         *tree_lines,
@@ -144,7 +145,7 @@ def run_agent(vault_dir, staging_dir, log_dir):
         "python3", "/app/scripts/custom_agent_loop.py",
         "/app/prompt_vault_profile.txt"
     ]
-    log_path = os.path.join(log_dir, f"vault_profile.{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.json")
+    log_path = os.path.join(log_dir, f"vault_profile.{now_local().strftime('%Y-%m-%d_%H%M%S')}.json")
 
     os.makedirs(log_dir, exist_ok=True)
 

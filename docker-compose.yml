@@ -44,8 +44,27 @@ services:
       - ./prompt_dry_run.txt:/app/prompt_dry_run.txt:ro
       - ./prompt_personal_email.txt:/app/prompt_personal_email.txt:ro
       - ./prompt_personal_email_dry_run.txt:/app/prompt_personal_email_dry_run.txt:ro
+      - ./prompt_telegram.txt:/app/prompt_telegram.txt:ro
+      - ./prompt_telegram_dry_run.txt:/app/prompt_telegram_dry_run.txt:ro
+      - ./prompt_whatsapp.txt:/app/prompt_whatsapp.txt:ro
+      - ./prompt_whatsapp_dry_run.txt:/app/prompt_whatsapp_dry_run.txt:ro
       - ./prompt_vault_profile.txt:/app/prompt_vault_profile.txt:ro
       - ./prompt_weekly_rollup.txt:/app/prompt_weekly_rollup.txt:ro
+    restart: unless-stopped
+
+  # Always-on WhatsApp bridge (Baileys, Node). Maintains the linked-device
+  # session and appends messages to ./data/whatsapp/ for fetch_whatsapp.py to
+  # file nightly. Shares the ./data volume with the pipeline (as /work).
+  whatsapp-bridge:
+    build: ./bridge
+    image: copilot-digest-whatsapp-bridge:latest
+    container_name: copilot-digest-whatsapp-bridge
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Singapore
+    volumes:
+      - ./data:/work
     restart: unless-stopped
 
   # NotebookLM-style chat over the vault (read-only). Reuses the pipeline image -
@@ -75,6 +94,8 @@ services:
       # overlay the live host copies (same rationale as the pipeline mounts).
       - ./prompt_dry_run.txt:/app/prompt_dry_run.txt:ro
       - ./prompt_personal_email_dry_run.txt:/app/prompt_personal_email_dry_run.txt:ro
+      - ./prompt_telegram_dry_run.txt:/app/prompt_telegram_dry_run.txt:ro
+      - ./prompt_whatsapp_dry_run.txt:/app/prompt_whatsapp_dry_run.txt:ro
     ports:
       - "8420:8420"
     restart: unless-stopped

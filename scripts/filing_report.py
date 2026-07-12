@@ -15,7 +15,8 @@ import json
 import os
 import sys
 import urllib.parse
-from datetime import datetime
+
+from tzutil import now_local
 
 MAX_NOTES_IN_SUMMARY = 8
 
@@ -79,7 +80,7 @@ def main():
         # instead of silently skipping it.
         print("unreported | agent gave no final summary (likely hit its turn limit)")
         if vault_log:
-            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            stamp = now_local().strftime("%Y-%m-%d %H:%M")
             line = (f"- {stamp} — **unreported** — agent gave no final summary "
                     f"(likely hit its turn limit; see the agent log)\n")
             os.makedirs(os.path.dirname(vault_log), exist_ok=True)
@@ -123,7 +124,7 @@ def main():
 
     if vault_log and status not in ("skipped_duplicate", "no_content"):
         links = ", ".join(vault_link(p) for p in files) or "(no notes listed)"
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        stamp = now_local().strftime("%Y-%m-%d %H:%M")
         line = f"- {stamp} — **{status}**"
         if work_date:
             line += f" — {date_label} {work_date}"

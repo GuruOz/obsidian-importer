@@ -11,7 +11,6 @@ Exit codes (consumed by run-ingest.sh):
 import os
 import re
 import sys
-from datetime import datetime, timezone
 
 from graph_mail import (
     env,
@@ -21,6 +20,7 @@ from graph_mail import (
     html_to_markdown,
     resolve_folder_id,
 )
+from tzutil import fmt_local, today_local
 
 
 def message_to_markdown(message, kind="digest"):
@@ -33,7 +33,12 @@ def message_to_markdown(message, kind="digest"):
     else:
         body_md = content.strip()
 
-    received = message.get("receivedDateTime", "")
+    received_raw = message.get("receivedDateTime", "")
+    # Graph returns UTC; show Singapore wall-clock so the agent files under the
+    # correct local day. (verify_filing.py derives digest dates from the email
+    # body's "Work Log - DD Mon YYYY" lines, not this header, so changing the
+    # displayed format here is safe.)
+    received = f"{fmt_local(received_raw)} SGT" if received_raw else ""
     if kind == "note":
         # Ad-hoc work notes are idempotency-keyed per message (a date's digest
         # marker must not block them), so the agent needs the Message-ID; the
@@ -124,7 +129,7 @@ def main():
     with open(digest_path, "w", encoding="utf-8") as f:
         f.write(combined)
 
-    today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+    today = today_local()
     archive_path = os.path.join(staging_dir, "archive", f"{today}.md")
     with open(archive_path, "w", encoding="utf-8") as f:
         f.write(combined)

@@ -1,0 +1,56 @@
+You are proposing how tonight's batch of WhatsApp chat activity WOULD be filed into this
+Obsidian vault. This is a DRY RUN: you must NOT create or edit any vault note. Your only
+output file is /work/staging/whatsapp/proposed.md.
+
+{{DATE_CONTEXT}}
+
+1. Read the staged batch at /work/staging/whatsapp/whatsapp.md. It contains one section per
+   "chat-day" - one conversation on one Singapore calendar date - headed:
+     ## Chat: <name> — YYYY-MM-DD
+     Section-ID: whatsapp:<chat-jid>:<date>
+     Type: dm | group
+   followed by "- [HH:MM] <sender>: <text>" lines. All times are already Singapore time
+   (SGT) - use them as-is. "Me" is you.
+2. Follow the vault conventions from Filing_Rules.md (in your system prompt if present).
+3. Read /work/staging/whatsapp/vault_index.txt (every note as "YYYY-MM-DD<TAB>path") to
+   decide create-vs-update; Read only the notes you shortlist. Also read
+   /work/staging/whatsapp/recent_filing_log.md if present. Use search_relevant for ongoing
+   matters whose title doesn't match the chat wording.
+
+TRIAGE (decide per chat-day section):
+   - SKIP pure noise: idle chit-chat, greetings, reactions, spam, irrelevant broadcasts.
+   - FILE anything with lasting significance: decisions, plans/bookings, commitments,
+     deadlines, action items, meaningful correspondence, shared links/docs, facts to keep.
+   - When genuinely unsure, FILE it. But record every skip with its reason.
+
+PROPOSAL (do not touch the vault - write only to /work/staging/whatsapp/proposed.md):
+4. For each section you would FILE: determine which date's daily note it lands in (the date
+   in the header), and which topic/project note (existing UPDATE or new CREATE). Summarize
+   the conversation faithfully (decisions, commitments, action items, dates, amounts, names,
+   links; note group participants) - do not drop substantive detail. Include the idempotency
+   marker <!-- whatsapp:<chat-id>:<date> --> (exactly the Section-ID value) and `[[links]]`
+   to related notes. Use the YYYY-MM-DD (MMM) date format; compute weekdays from the date.
+   - **DATA PRESERVATION (LOSSLESS)**: preserve identifiers, amounts, dates, names, quotes,
+     action items, shared links. Only omit true noise.
+   - **NOTE GRANULARITY**: highly specific titles for distinct matters; never fold a
+     distinct matter into a generic umbrella note.
+   - **FILENAME RULE**: never use # ^ | [ ] : \ / in a note title.
+   - **EXACT-TITLE LINK RULE**: copy an existing note's title character-for-character from
+     vault_index.txt - never retype it from the chat wording.
+   - **LINK INTEGRITY RULE**: any `[[New Note Title]]` you propose must come with the new
+     note's proposed content; never leave a dangling link.
+5. For each section you would SKIP: one line with the chat, date, and skip reason.
+6. Write your full proposal to /work/staging/whatsapp/proposed.md - the only file you may
+   write. Begin it with a PLAN TABLE: one row per section (chat + date) listing FILE (target
+   daily note + any topic note, CREATE/UPDATE) or SKIP (reason). Then, for each
+   section-to-file: name the target daily note and any topic note, CREATE or UPDATE, and the
+   content that would be appended. Do not edit vault files.
+7. Work efficiently: don't re-read files you've already read; keep commentary between tool
+   calls to a minimum.
+8. Use your available read-only tools (read, glob, grep, search_relevant) plus write ONLY to
+   proposed.md.
+9. When finished, call the finish tool with:
+   {"status": "filed" | "no_content", "work_dates": ["YYYY-MM-DD", ...],
+    "sections_filed": N, "skipped": M, "skipped_details": ["<chat> <date> — <reason>", ...]}
+   - sections_filed = sections you would file; skipped = sections triaged out. Set status to
+     "no_content" only if the whole batch would be skipped.

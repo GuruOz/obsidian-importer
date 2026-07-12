@@ -244,9 +244,71 @@ same mail again.
 > override above is the escape hatch if you'd rather keep personal mail on a
 > different provider.
 
-**Adding a future source** (calendar, a WhatsApp-export drop folder, bookmarks,
-bank-statement CSVs) is just: a fetcher that stages markdown + `pending_ids.txt`, a
-prompt template, and a `case` entry in `run-ingest.sh`.
+**Adding a future source** (calendar, bookmarks, bank-statement CSVs) is just: a
+fetcher that stages markdown + `pending_ids.txt`, a live+dry-run prompt pair, a
+`case` entry in `run-ingest.sh`, and — if it's interactive — a `.env` block and a
+Connections page. The Telegram and WhatsApp sources below are worked examples.
+
+## Chat sources: Telegram & WhatsApp
+
+Two more sources file your **personal chats** into the vault the same way the
+email sources do — full LLM triage-and-file, one **chat-day section** per
+conversation per Singapore day, filed under that day's daily note with a
+`<!-- telegram:<chat>:<date> -->` / `<!-- whatsapp:<chat>:<date> -->` idempotency
+marker. Both support a one-time **historical import** and nightly capture of the
+day's messages, with **include/exclude** lists so you choose which chats/groups
+are filed. They run nightly at **23:00 (Telegram)** and **23:30 (WhatsApp)**,
+after the email sources, sharing the same vault lock.
+
+> ⚠️ **WhatsApp caveat — read this.** The WhatsApp bridge uses **Baileys**, an
+> unofficial WhatsApp Web client. Using it technically violates WhatsApp's Terms
+> of Service and carries a small but real risk of your number being banned.
+> Passive personal archiving from a linked device is low-profile and the bridge
+> **never sends messages**, but the risk isn't zero — proceed only if you accept
+> it. Telegram's use (Telethon) is a normal user-account API session and does not
+> carry the same standing risk.
+
+**How they differ under the hood.** Telegram history is fully server-side, so
+`fetch_telegram.py` is a plain nightly fetcher (Telethon/MTProto — the Bot API
+can't read your own chats). WhatsApp requires a **long-lived linked-device
+socket**, so an always-on `whatsapp-bridge` container (Baileys, Node) maintains
+the session and appends messages to `data/whatsapp/messages/*.jsonl`; the nightly
+`fetch_whatsapp.py` just reads that store (no network).
+
+### One-time setup
+
+1. **Pull & build on the server:** `git pull && docker compose build && docker
+   compose up -d`. This builds the pipeline image (now with `tzdata`) **and** the
+   `whatsapp-bridge` image, and restarts supercronic so the new crontab and the
+   corrected Singapore-time schedule take effect.
+2. **Telegram credentials:** create an app at <https://my.telegram.org> → *API
+   development tools*, then put the **API ID** and **API hash** into **Settings →
+   Telegram** and Save.
+3. **Log in / pair (dashboard → Connections):**
+   - *Telegram:* enter your phone → the code Telegram sends you → your two-step
+     password if you have one. (Terminal fallback: `docker compose exec -it
+     pipeline python3 scripts/telegram_login.py`.)
+   - *WhatsApp:* on your phone, WhatsApp → **Linked Devices → Link a Device**, and
+     scan the QR shown on the page. **Keep your phone online** until the initial
+     history sync finishes.
+4. **Pick chats:** the Connections page lists every discovered chat. Copy the
+   exact names (or IDs/JIDs) into the **Include/Exclude** fields on the Telegram
+   and WhatsApp settings cards. A non-empty *Include* list is an allowlist;
+   otherwise everything is filed except *Exclude* (with the group/channel/bot
+   toggles applying to Telegram).
+5. **Dry-run first, then backfill, then go live:** from **Settings → Run
+   Ingestion**, pick the source, keep **Dry run** on, and run a small window
+   (e.g. yesterday). Review `data/staging/<source>/proposed.md`. Then backfill
+   history with a **start/end date window** (dry-run first; for Telegram, set
+   `TELEGRAM_START_DATE=all` for the full history). When you're happy, set
+   `TELEGRAM_DRY_RUN=0` / `WHATSAPP_DRY_RUN=0` for nightly live filing.
+6. **Optional — save quota:** chat volume is the main quota driver. Point
+   `TELEGRAM_LLM_*` / `WHATSAPP_LLM_*` at a cheaper or local (Ollama) model to
+   keep nightly filing cheap.
+
+If the WhatsApp session drops (WhatsApp evicts idle linked devices after ~14
+days offline), the bridge reports `logged_out`, sends an ntfy alert, and the
+fetcher exits 30 — just **Re-pair** from the Connections page.
 
 ## Operational notes
 
@@ -257,6 +319,14 @@ prompt template, and a `case` entry in `run-ingest.sh`.
   `VAULT_DIR` still resolves to a populated vault with `Filing_Rules.md` present.
 - **Windows hosts:** enable "Start Docker Desktop when you sign in" in Docker Desktop
   settings, so the always-on guarantee survives reboots.
+- **Timezone (Singapore):** all timestamps, logs, filing dates, and cron schedules
+  run in `Asia/Singapore` (`TZ` in `docker-compose.yml`; the image now ships
+  `tzdata`, and Python routes local-time calls through `scripts/tzutil.py`). Graph
+  filters and the source watermark files stay in UTC internally, which is correct —
+  only displayed times and calendar-day boundaries are localized. **On first deploy
+  of this change**, cron jobs move from firing 8 hours late (the old `tzdata`-less
+  UTC fallback) to their intended SGT times; the ledger prevents any double-filing
+  across the shift.
 - **Re-authenticating Graph:** if a fetcher exits with code 30 (and you get a
   "Graph auth expired" ntfy alert), re-run step 5. The same `Mail.Read` token serves
   both the digest and the personal-inbox source.

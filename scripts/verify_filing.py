@@ -10,8 +10,8 @@ the run log) and, on a live run, a summary sub-bullet is appended to the Filing
 Log entry filing_report.py just wrote.
 
 Usage:
-  verify_filing.py --source <digest|personal> --staging-dir S --vault-dir V \\
-      --agent-log L [--filing-log F] [--dry-run]
+  verify_filing.py --source <digest|personal|telegram|whatsapp> --staging-dir S \\
+      --vault-dir V --agent-log L [--filing-log F] [--dry-run]
 """
 import argparse
 import difflib
@@ -27,6 +27,27 @@ import filing_report
 DIGEST_SECTION_MARKER = "Source Basis"
 DUP_TITLE_RATIO = 0.75
 COVERAGE_WARN_FRACTION = 0.5   # warn if digest entries_filed < this * workstreams
+
+# Chat sources (WhatsApp, Telegram) share one shape: the staged batch is a list
+# of "chat-day" sections, each carrying a "Section-ID: <source>:<chat>:<date>"
+# line whose value doubles as the idempotency marker <!-- <section-id> -->.
+CHAT_SOURCES = ("telegram", "whatsapp")
+STAGED_FILENAME = {
+    "digest": "digest.md",
+    "personal": "personal.md",
+    "telegram": "telegram.md",
+    "whatsapp": "whatsapp.md",
+}
+
+
+def staged_file(staging_dir, source):
+    return os.path.join(staging_dir, STAGED_FILENAME.get(source, f"{source}.md"))
+
+
+def staged_sections(staging_dir, source):
+    """Section-IDs (== idempotency marker bodies) of a chat batch, in order."""
+    text = _read(staged_file(staging_dir, source))
+    return re.findall(r"(?m)^Section-ID:\s*(\S+)", text)
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#^]+)(?:[#^][^\]|]*)?(?:\|[^\]]*)?\]\]")
 _MDLINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+\.md)\)")
@@ -166,6 +187,21 @@ def check_markers(source, status, work_dates, staging_dir, vault_dir, warn):
                         and f"<!-- work-note:<{mid}> -->" not in haystack):
                     warn(f"ad-hoc note {mid} left no work-note marker in any daily note "
                          "(filing may have silently failed)")
+    elif source in CHAT_SOURCES:
+        # Each chat-day section should have left a <!-- <section-id> --> marker in
+        # a daily note. Some sections are legitimately skipped as chit-chat, so
+        # (like personal) only flag when a large share left no marker.
+        sections = staged_sections(staging_dir, source)
+        if not sections:
+            return
+        haystack = _daily_notes_text(vault_dir)
+        missing = [sid for sid in sections if f"<!-- {sid} -->" not in haystack]
+        if missing and len(missing) == len(sections):
+            warn(f"none of the {len(sections)} staged {source} section(s) left a marker "
+                 "(all skipped as noise, or filing silently failed)")
+        elif len(missing) > max(2, len(sections) // 2):
+            warn(f"{len(missing)}/{len(sections)} staged {source} section(s) left no marker "
+                 "(unexpected if they were meant to be filed)")
     else:  # personal: each pending message id should have left a marker somewhere
         pending = [_strip_id_brackets(m) for m in
                    _read(os.path.join(staging_dir, "pending_ids.txt")).split()]
@@ -266,7 +302,15 @@ def check_duplicates(files_touched, pre_paths, vault_dir, warn):
 
 
 def check_coverage(source, status, staging_dir, result, warn):
-    if source == "personal":
+    if source in CHAT_SOURCES:
+        n_sections = len(staged_sections(staging_dir, source))
+        filed = result.get("sections_filed")
+        skipped = result.get("skipped")
+        if n_sections and filed is not None and skipped is not None:
+            if filed + skipped != n_sections:
+                warn(f"coverage mismatch: {n_sections} staged {source} section(s) but "
+                     f"{filed} filed + {skipped} skipped = {filed + skipped}")
+    elif source == "personal":
         staged = _read(os.path.join(staging_dir, "personal.md"))
         n_emails = len(re.findall(r"(?m)^## Email \d+:", staged))
         filed = result.get("entries_filed")
@@ -292,7 +336,14 @@ def check_dry_run(source, staging_dir, result, warn):
     if not proposed.strip():
         warn("proposed.md is empty")
         return
-    if source == "personal":
+    if source in CHAT_SOURCES:
+        n_sections = len(staged_sections(staging_dir, source))
+        filed = result.get("sections_filed") or 0
+        skipped = result.get("skipped") or 0
+        if n_sections and (filed + skipped) != n_sections:
+            warn(f"coverage: {n_sections} staged {source} section(s) but proposal accounts "
+                 f"for {filed} filed + {skipped} skipped")
+    elif source == "personal":
         staged = _read(os.path.join(staging_dir, "personal.md"))
         n_emails = len(re.findall(r"(?m)^## Email \d+:", staged))
         filed = result.get("entries_filed") or 0
@@ -327,7 +378,8 @@ def append_filing_log(filing_log, n_warnings, warnings, n_fixed=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", required=True, choices=["digest", "personal"])
+    ap.add_argument("--source", required=True,
+                    choices=["digest", "personal", "telegram", "whatsapp"])
     ap.add_argument("--staging-dir", required=True)
     ap.add_argument("--vault-dir", required=True)
     ap.add_argument("--agent-log", required=True)

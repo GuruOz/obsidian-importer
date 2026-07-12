@@ -388,6 +388,7 @@
   <div id="settings-sidebar">
     <div class="settings-nav-title">Actions</div>
     <div id="ingest-action" class="settings-item">Run Email Ingestion</div>
+    <div id="connections-action" class="settings-item">Connections (Telegram / WhatsApp)</div>
     <div class="settings-nav-title">Settings</div>
     <div id="settings-all-item" class="settings-item">All Settings</div>
     <div id="settings-cat-list" style="display: flex; flex-direction: column;"></div>
@@ -408,9 +409,11 @@
               <label class="form-label">Source</label>
               <div class="form-comment">Which mailbox to ingest right now, instead of waiting for the nightly cron run.</div>
             </div>
-            <div style="display:flex; gap:0.5rem;">
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
               <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="personal" checked> Personal Email</label>
               <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="digest"> Work Digest</label>
+              <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="telegram"> Telegram</label>
+              <label style="cursor:pointer;"><input type="radio" name="ingest-source" value="whatsapp"> WhatsApp</label>
             </div>
           </div>
         </div>
@@ -484,6 +487,62 @@
       </div>
       <h3 style="margin: 0.5rem 0;">Execution Log</h3>
       <div id="ingest-log" style="flex: 1; min-height: 200px; background: #000; padding: 1rem; border-radius: 8px; border: 1px solid #333; color: #bbb; white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; overflow-y: auto;"></div>
+    </div>
+
+    <div id="connections-panel" style="display:none; flex-direction:column; gap:1rem; overflow-y:auto;">
+      <!-- Telegram -->
+      <div class="settings-section">
+        <div class="settings-section-title">Telegram</div>
+        <p class="form-comment" style="margin-top:0;">Log in with your Telegram account so the nightly job can read your chats (read-only). You need an API ID and hash from <span style="color:#8ab">my.telegram.org</span> saved in the Telegram settings card first. Telegram will send a login code to your app.</p>
+        <p id="tg-status" style="font-size:0.9rem; color:#aaa;">Checking status…</p>
+        <div id="tg-login-form" style="display:none; flex-direction:column; gap:0.6rem; max-width:420px;">
+          <div id="tg-step-phone">
+            <label class="form-label" for="tg-phone">Phone number (international)</label>
+            <input id="tg-phone" class="form-input" type="tel" placeholder="+6591234567" style="width:100%;">
+            <button id="tg-send-code" style="margin-top:0.5rem; background:#2b5797; color:white; padding:0.5rem 1rem; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Send code</button>
+          </div>
+          <div id="tg-step-code" style="display:none;">
+            <label class="form-label" for="tg-code">Login code (from your Telegram app)</label>
+            <input id="tg-code" class="form-input" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="12345" style="width:100%;">
+            <button id="tg-submit-code" style="margin-top:0.5rem; background:#2b5797; color:white; padding:0.5rem 1rem; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Confirm code</button>
+          </div>
+          <div id="tg-step-password" style="display:none;">
+            <label class="form-label" for="tg-password">Two-step verification password</label>
+            <input id="tg-password" class="form-input" type="password" autocomplete="current-password" style="width:100%;">
+            <button id="tg-submit-password" style="margin-top:0.5rem; background:#2b5797; color:white; padding:0.5rem 1rem; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">Confirm password</button>
+          </div>
+          <span id="tg-login-msg" style="font-size:0.85rem; color:#c88;"></span>
+        </div>
+        <button id="tg-relogin" style="display:none; margin-top:0.5rem; background:#555; color:white; padding:0.4rem 0.9rem; border:none; border-radius:6px; cursor:pointer;">Log in as a different account</button>
+        <div style="margin-top:1rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label class="form-label">Discovered chats</label>
+            <button id="tg-refresh-chats" style="background:#333; color:#ccc; padding:0.3rem 0.7rem; border:1px solid #555; border-radius:6px; cursor:pointer; font-size:0.8rem;">Refresh</button>
+          </div>
+          <p class="form-comment">Copy exact titles into the Include/Exclude fields in the Telegram settings card.</p>
+          <div id="tg-chats" style="max-height:260px; overflow-y:auto; background:#1e1e1e; border:1px solid #333; border-radius:6px; padding:0.5rem; font-size:0.85rem;"></div>
+        </div>
+      </div>
+
+      <!-- WhatsApp -->
+      <div class="settings-section">
+        <div class="settings-section-title">WhatsApp</div>
+        <p class="form-comment" style="margin-top:0;">Pair this pipeline as a WhatsApp linked device: open WhatsApp on your phone → Settings → Linked Devices → Link a Device, then scan the QR below. Keep your phone online during the first history sync. WhatsApp doesn't officially support third-party clients — see the README caveat.</p>
+        <p id="wa-status" style="font-size:0.9rem; color:#aaa;">Checking status…</p>
+        <div id="wa-qr-wrap" style="display:none;">
+          <img id="wa-qr" alt="WhatsApp QR code" style="width:260px; height:260px; background:#fff; padding:8px; border-radius:8px;">
+          <p class="form-comment">Scan this within ~20s; it refreshes automatically.</p>
+        </div>
+        <button id="wa-repair" style="display:none; margin-top:0.5rem; background:#8b2d2d; color:white; padding:0.4rem 0.9rem; border:none; border-radius:6px; cursor:pointer;">Re-pair (log out and show a new QR)</button>
+        <div style="margin-top:1rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <label class="form-label">Discovered chats</label>
+            <button id="wa-refresh-chats" style="background:#333; color:#ccc; padding:0.3rem 0.7rem; border:1px solid #555; border-radius:6px; cursor:pointer; font-size:0.8rem;">Refresh</button>
+          </div>
+          <p class="form-comment">Copy exact names into the Include/Exclude fields in the WhatsApp settings card.</p>
+          <div id="wa-chats" style="max-height:260px; overflow-y:auto; background:#1e1e1e; border:1px solid #333; border-radius:6px; padding:0.5rem; font-size:0.85rem;"></div>
+        </div>
+      </div>
     </div>
     <div id="settings-save-row" style="margin-top: 1rem; display: flex; justify-content: flex-end; gap: 1rem; align-items: center;">
       <span id="settings-status" style="font-size: 0.9rem; color: #aaa;"></span>
@@ -1601,6 +1660,8 @@ const FILE_LABELS = {
 const CATEGORIES = [
   { name: "Work Digest", blurb: "The nightly job that reads your Microsoft 365 Copilot work-summary email and files it into the vault." },
   { name: "Personal Email", blurb: "The nightly triage of your inbox: the agent skips noise (newsletters, OTPs, receipts) and files what matters. Use the Run Email Ingestion action on the left to run it on demand." },
+  { name: "Telegram", blurb: "Nightly filing of your Telegram chats via a user session (Telethon). Get an API ID/hash from my.telegram.org, then log in on the Connections page. Include/exclude chats by name; copy exact names from the discovered-chats list." },
+  { name: "WhatsApp", blurb: "Nightly filing of your WhatsApp chats. An always-on bridge (Baileys) captures messages after you pair your phone on the Connections page. Include/exclude chats by name. Note: WhatsApp doesn't officially support third-party clients — see the README caveat." },
   { name: "Schedule", blurb: "When the automatic jobs run. Times are in the pipeline container's timezone (Asia/Singapore by default). Schedule changes take effect after a restart — you'll be offered one when you save." },
   { name: "AI Model", blurb: "Which AI reads and files your email. Any OpenAI-compatible service works — pick a preset or fill the fields manually. A local Ollama server is free and keeps your email on your own machine." },
   { name: "Notifications", blurb: "Get a phone notification after each run via the free ntfy app. Pick any hard-to-guess topic name, subscribe to the same topic in the app, done. Leave blank to disable." },
@@ -1619,6 +1680,8 @@ const LLM_PRESETS = [
 const CRON_JOBS = [
   { id: "digest", match: "run-digest.sh", label: "Work digest", desc: "Fetches and files the nightly Copilot digest.", weekly: false },
   { id: "personal", match: "run-ingest.sh personal", label: "Personal email triage", desc: "Triage-and-file pass over the inbox.", weekly: false },
+  { id: "telegram", match: "run-ingest.sh telegram", label: "Telegram chats", desc: "Files the day's Telegram messages.", weekly: false },
+  { id: "whatsapp", match: "run-ingest.sh whatsapp", label: "WhatsApp chats", desc: "Files the day's WhatsApp messages.", weekly: false },
   { id: "weekly", match: "run-weekly.sh", label: "Weekly review note", desc: "Writes the week's rollup note.", weekly: true },
 ];
 const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -1681,6 +1744,35 @@ const envSchema = {
   "PERSONAL_MAIL_FOLDER": { label: "Mail folder", category: "Personal Email", type: "text", default: "Inbox", desc: "The folder to triage. Nested folders are written \"Parent/Child\"." },
   "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max emails per run", category: "Personal Email", type: "number", default: "25", desc: "A backlog drains at this pace per nightly run. The Run Email Ingestion action can drain a whole backlog at once." },
   "PERSONAL_MAIL_LOOKBACK_DAYS": { label: "Lookback (days)", category: "Personal Email", type: "number", default: "0", desc: "How far before setup to backfill. 0 = only mail arriving after setup. Raising it backfills older mail; already-processed email is never re-filed." },
+
+  // Telegram
+  "TELEGRAM_API_ID": { label: "API ID", category: "Telegram", type: "text", default: "", desc: "From https://my.telegram.org → API development tools. Required to connect." },
+  "TELEGRAM_API_HASH": { label: "API hash", category: "Telegram", type: "password", default: "", desc: "The API hash paired with the API ID above. Treated as a secret." },
+  "TELEGRAM_DRY_RUN": { label: "Dry run — propose only", category: "Telegram", type: "toggle", default: "1", desc: "When on, Telegram filing writes a proposal instead of changing the vault. Independent of the other sources." },
+  "TELEGRAM_INCLUDE_CHATS": { label: "Include chats", category: "Telegram", type: "text", default: "", desc: "Comma-separated chat titles, @usernames, or numeric ids. A non-empty list is an allowlist (only these are filed; named chats override the type toggles below). Copy exact names from the Connections page." },
+  "TELEGRAM_EXCLUDE_CHATS": { label: "Exclude chats", category: "Telegram", type: "text", default: "", desc: "Comma-separated titles / @usernames / ids to always skip." },
+  "TELEGRAM_INCLUDE_GROUPS": { label: "Include groups", category: "Telegram", type: "toggle", default: "1", desc: "File messages from group chats (one-to-one chats are always included)." },
+  "TELEGRAM_INCLUDE_CHANNELS": { label: "Include channels", category: "Telegram", type: "toggle", default: "0", desc: "File broadcast-channel posts. Usually noise — off by default." },
+  "TELEGRAM_INCLUDE_BOTS": { label: "Include bots", category: "Telegram", type: "toggle", default: "0", desc: "File chats with bots. Usually noise — off by default." },
+  "TELEGRAM_MAX_PER_RUN": { label: "Max messages per run", category: "Telegram", type: "number", default: "500", desc: "A backlog drains at this pace per run/pass." },
+  "TELEGRAM_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Telegram", type: "number", default: "60", desc: "Max tool-calling turns the filing agent gets per pass. More loops = more tokens." },
+  "TELEGRAM_LOOKBACK_DAYS": { label: "Lookback (days)", category: "Telegram", type: "number", default: "0", desc: "How far back the FIRST run starts. 0 = only messages arriving after setup. For a full history import, use the Run Ingestion action with a start date (or set a start date below)." },
+  "TELEGRAM_LLM_BASE_URL": { label: "Base URL", category: "Telegram", type: "text", default: "", subhead: "Telegram AI override (optional)", desc: "Point Telegram filing at a different (even local) model — chat volume is the quota driver, so a cheaper model here saves the most. Blank uses the main AI Model." },
+  "TELEGRAM_LLM_API_KEY": { label: "API key", category: "Telegram", type: "password", default: "" },
+  "TELEGRAM_LLM_MODEL": { label: "Model name", category: "Telegram", type: "text", default: "" },
+
+  // WhatsApp
+  "WHATSAPP_DRY_RUN": { label: "Dry run — propose only", category: "WhatsApp", type: "toggle", default: "1", desc: "When on, WhatsApp filing writes a proposal instead of changing the vault. Independent of the other sources." },
+  "WHATSAPP_SYNC_FULL_HISTORY": { label: "Sync full history on pair", category: "WhatsApp", type: "toggle", default: "1", desc: "Ask WhatsApp to send the linked device your full history when you pair. Keep your phone online during the initial sync. Read by the bridge." },
+  "WHATSAPP_INCLUDE_CHATS": { label: "Include chats", category: "WhatsApp", type: "text", default: "", desc: "Comma-separated chat names or JIDs. A non-empty list is an allowlist. Copy exact names from the Connections page." },
+  "WHATSAPP_EXCLUDE_CHATS": { label: "Exclude chats", category: "WhatsApp", type: "text", default: "", desc: "Comma-separated names / JIDs to always skip." },
+  "WHATSAPP_INCLUDE_GROUPS": { label: "Include groups", category: "WhatsApp", type: "toggle", default: "1", desc: "File messages from group chats (one-to-one chats are always included)." },
+  "WHATSAPP_MAX_PER_RUN": { label: "Max messages per run", category: "WhatsApp", type: "number", default: "500", desc: "A backlog drains at this pace per run/pass." },
+  "WHATSAPP_MAX_LOOPS": { label: "Agent step budget (loops)", category: "WhatsApp", type: "number", default: "60", desc: "Max tool-calling turns the filing agent gets per pass." },
+  "WHATSAPP_LOOKBACK_DAYS": { label: "Lookback (days)", category: "WhatsApp", type: "number", default: "0", desc: "How far back the FIRST run starts. 0 = only messages arriving after setup. Use a start date in Run Ingestion to backfill history the bridge has captured." },
+  "WHATSAPP_LLM_BASE_URL": { label: "Base URL", category: "WhatsApp", type: "text", default: "", subhead: "WhatsApp AI override (optional)", desc: "Point WhatsApp filing at a different (even local) model. Blank uses the main AI Model." },
+  "WHATSAPP_LLM_API_KEY": { label: "API key", category: "WhatsApp", type: "password", default: "" },
+  "WHATSAPP_LLM_MODEL": { label: "Model name", category: "WhatsApp", type: "text", default: "" },
 
   // AI Model
   "LLM_BASE_URL": { label: "Service address (base URL)", category: "AI Model", type: "text", default: "", desc: "The AI provider's OpenAI-compatible endpoint. Use a preset above or paste your provider's URL." },
@@ -1900,6 +1992,7 @@ async function renderAllSettings() {
   currentSettingFile = '__all__';
   scheduleState = null;
   document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('connections-panel').style.display = 'none';
   document.getElementById('settings-textarea').style.display = 'none';
   const formDiv = document.getElementById('settings-form');
   formDiv.style.display = 'flex';
@@ -2020,6 +2113,7 @@ async function loadSetting(filename, el) {
   currentSettingFile = filename;
   scheduleState = null;
   document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('connections-panel').style.display = 'none';
   document.getElementById('settings-form').style.display = 'none';
   document.getElementById('settings-save-row').style.display = 'flex';
   const status = document.getElementById('settings-status');
@@ -2175,9 +2269,16 @@ let ingestSource = 'personal';
 let ingestLastStatus = {};
 let digestDryDefault = null;
 
+const WINDOW_SOURCES = ['personal', 'telegram', 'whatsapp'];
+const INGEST_TITLES = {
+  personal: 'Personal Email Ingestion', digest: 'Work Digest Ingestion',
+  telegram: 'Telegram Ingestion', whatsapp: 'WhatsApp Ingestion',
+};
 const INGEST_DESC = {
   personal: 'Runs the personal-inbox triage now, instead of waiting for the nightly cron run. To backfill older mail, set a lookback (rewinds the watermark, never forward) or an explicit start/end window (ignores the watermark and leaves it untouched). Already-processed emails are never re-filed.',
   digest: 'Runs the work-digest filing now, instead of waiting for the nightly cron run. Optionally backfill a specific work date.',
+  telegram: 'Runs Telegram chat filing now. To backfill history, set a lookback or an explicit start/end window (Start date accepts "all" via the field placeholder is not supported here - use Settings TELEGRAM_START_DATE=all for the full history). Already-filed messages are never re-filed. Log in first on the Connections page.',
+  whatsapp: 'Runs WhatsApp chat filing now, reading messages the always-on bridge has captured. Set a lookback or start/end window to backfill. Pair the phone first on the Connections page; the bridge must be connected.',
 };
 
 async function loadDigestDryDefault() {
@@ -2194,10 +2295,10 @@ async function loadDigestDryDefault() {
 async function syncIngestSourceUI() {
   const checked = document.querySelector('input[name="ingest-source"]:checked');
   ingestSource = checked ? checked.value : 'personal';
-  document.getElementById('ingest-opts-personal').style.display = ingestSource === 'personal' ? '' : 'none';
+  const isWindow = WINDOW_SOURCES.includes(ingestSource);
+  document.getElementById('ingest-opts-personal').style.display = isWindow ? '' : 'none';
   document.getElementById('ingest-opts-digest').style.display = ingestSource === 'digest' ? '' : 'none';
-  document.getElementById('ingest-title').textContent =
-    ingestSource === 'digest' ? 'Work Digest Ingestion' : 'Personal Email Ingestion';
+  document.getElementById('ingest-title').textContent = INGEST_TITLES[ingestSource] || 'Run Ingestion';
   document.getElementById('ingest-desc').textContent = INGEST_DESC[ingestSource];
   const dry = document.getElementById('ingest-dry-run');
   const dryComment = document.getElementById('ingest-dry-comment');
@@ -2209,8 +2310,8 @@ async function syncIngestSourceUI() {
       + (digestDryDefault ? " (currently: dry run)." : " (currently: LIVE).");
   } else {
     dry.checked = true;
-    dryComment.textContent = "Propose only (staging/personal/proposed.md), don't write to the vault. "
-      + "Dry runs leave the ledger and watermark untouched. Single pass only (drain has no effect).";
+    dryComment.textContent = "Propose only (staging/" + ingestSource + "/proposed.md), don't write to "
+      + "the vault. Dry runs leave the ledger and watermark untouched. Single pass only (drain has no effect).";
   }
 }
 document.querySelectorAll('input[name="ingest-source"]').forEach(r => { r.onchange = syncIngestSourceUI; });
@@ -2221,6 +2322,7 @@ function showIngestPanel() {
   currentSettingFile = null;
   document.getElementById('settings-textarea').style.display = 'none';
   document.getElementById('settings-form').style.display = 'none';
+  document.getElementById('connections-panel').style.display = 'none';
   document.getElementById('settings-save-row').style.display = 'none';
   document.getElementById('ingest-panel').style.display = 'flex';
   syncIngestSourceUI();
@@ -2228,6 +2330,167 @@ function showIngestPanel() {
   pollIngestStatus();
 }
 document.getElementById('ingest-action').onclick = showIngestPanel;
+
+// ---- Connections (Telegram + WhatsApp auth) ----
+let waPollTimer = null;
+function showConnectionsPanel() {
+  document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
+  document.getElementById('connections-action').classList.add('active');
+  currentSettingFile = null;
+  document.getElementById('settings-textarea').style.display = 'none';
+  document.getElementById('settings-form').style.display = 'none';
+  document.getElementById('ingest-panel').style.display = 'none';
+  document.getElementById('settings-save-row').style.display = 'none';
+  document.getElementById('connections-panel').style.display = 'flex';
+  refreshTelegramStatus();
+  refreshTelegramChats();
+  refreshWhatsAppStatus();
+  refreshWhatsAppChats();
+}
+document.getElementById('connections-action').onclick = showConnectionsPanel;
+
+function tgSetStep(step) {
+  document.getElementById('tg-step-phone').style.display = step === 'phone' ? '' : 'none';
+  document.getElementById('tg-step-code').style.display = step === 'code' ? '' : 'none';
+  document.getElementById('tg-step-password').style.display = step === 'password' ? '' : 'none';
+}
+
+async function refreshTelegramStatus() {
+  const el = document.getElementById('tg-status');
+  const form = document.getElementById('tg-login-form');
+  const relogin = document.getElementById('tg-relogin');
+  el.textContent = 'Checking status…';
+  form.style.display = 'none'; relogin.style.display = 'none';
+  try {
+    const s = await (await fetch('/api/telegram/status')).json();
+    if (!s.configured) {
+      el.textContent = s.error || 'Set TELEGRAM_API_ID and TELEGRAM_API_HASH in the Telegram settings card first.';
+      return;
+    }
+    if (s.authorized) {
+      el.textContent = '✓ Connected as ' + (s.name || 'your account') + '.';
+      relogin.style.display = '';
+    } else {
+      el.textContent = s.error ? ('Not connected: ' + s.error) : 'Not connected.';
+      form.style.display = 'flex'; tgSetStep('phone');
+    }
+  } catch (e) { el.textContent = 'Error: ' + e.message; }
+}
+
+document.getElementById('tg-relogin').onclick = () => {
+  document.getElementById('tg-status').textContent = 'Log in as a different account:';
+  document.getElementById('tg-login-form').style.display = 'flex';
+  document.getElementById('tg-relogin').style.display = 'none';
+  tgSetStep('phone');
+};
+
+async function tgPost(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify(body || {}) });
+  return res.json();
+}
+
+document.getElementById('tg-send-code').onclick = async () => {
+  const msg = document.getElementById('tg-login-msg');
+  const phone = document.getElementById('tg-phone').value.trim();
+  if (!phone) { msg.textContent = 'Enter your phone number.'; return; }
+  msg.textContent = 'Sending code…';
+  const r = await tgPost('/api/telegram/login/start', { phone });
+  if (r.error) { msg.textContent = r.error; return; }
+  if (r.already_authorized) { msg.textContent = ''; refreshTelegramStatus(); return; }
+  msg.textContent = 'Code sent — check your Telegram app.'; tgSetStep('code');
+};
+
+document.getElementById('tg-submit-code').onclick = async () => {
+  const msg = document.getElementById('tg-login-msg');
+  const code = document.getElementById('tg-code').value.trim();
+  if (!code) { msg.textContent = 'Enter the code.'; return; }
+  msg.textContent = 'Verifying…';
+  const r = await tgPost('/api/telegram/login/code', { code });
+  if (r.needs_password) { msg.textContent = 'Two-step verification is on — enter your password.'; tgSetStep('password'); return; }
+  if (r.error) { msg.textContent = r.error; return; }
+  msg.textContent = ''; refreshTelegramStatus(); refreshTelegramChats();
+};
+
+document.getElementById('tg-submit-password').onclick = async () => {
+  const msg = document.getElementById('tg-login-msg');
+  const password = document.getElementById('tg-password').value;
+  if (!password) { msg.textContent = 'Enter your password.'; return; }
+  msg.textContent = 'Verifying…';
+  const r = await tgPost('/api/telegram/login/password', { password });
+  if (r.error) { msg.textContent = r.error; return; }
+  msg.textContent = ''; document.getElementById('tg-password').value = '';
+  refreshTelegramStatus(); refreshTelegramChats();
+};
+
+function renderChatList(el, chats, emptyMsg) {
+  if (!chats || !chats.length) { el.innerHTML = '<span style="color:#777;">' + emptyMsg + '</span>'; return; }
+  el.innerHTML = chats.map(c => {
+    const title = (c.title || '(no title)').replace(/</g, '&lt;');
+    const meta = [c.type, c.username ? '@' + c.username : null, c.id].filter(Boolean).join(' · ');
+    return '<div style="padding:2px 0;">' + title + ' <span style="color:#777;">(' + meta + ')</span></div>';
+  }).join('');
+}
+
+async function refreshTelegramChats() {
+  const el = document.getElementById('tg-chats');
+  el.innerHTML = '<span style="color:#777;">Loading…</span>';
+  try {
+    const d = await (await fetch('/api/telegram/chats')).json();
+    renderChatList(el, d.chats, d.note || 'No chats discovered yet.');
+  } catch (e) { el.innerHTML = '<span style="color:#c88;">Error: ' + e.message + '</span>'; }
+}
+document.getElementById('tg-refresh-chats').onclick = refreshTelegramChats;
+
+async function refreshWhatsAppStatus() {
+  const el = document.getElementById('wa-status');
+  const qrWrap = document.getElementById('wa-qr-wrap');
+  const repair = document.getElementById('wa-repair');
+  clearTimeout(waPollTimer);
+  try {
+    const s = await (await fetch('/api/whatsapp/status')).json();
+    const state = s.state || 'unknown';
+    if (state === 'connected') {
+      el.textContent = '✓ Connected' + (s.me ? ' as ' + s.me : '') + '.';
+      qrWrap.style.display = 'none'; repair.style.display = '';
+    } else if (state === 'waiting_qr') {
+      el.textContent = 'Waiting for you to scan the QR code…';
+      const img = document.getElementById('wa-qr');
+      img.src = '/api/whatsapp/qr?t=' + Date.now();
+      qrWrap.style.display = ''; repair.style.display = 'none';
+    } else if (state === 'logged_out') {
+      el.textContent = 'Logged out — click Re-pair to link again.';
+      qrWrap.style.display = 'none'; repair.style.display = '';
+    } else {
+      el.textContent = 'Bridge state: ' + state + (s.error ? ' (' + s.error + ')' : '');
+      qrWrap.style.display = 'none'; repair.style.display = s.error ? 'none' : '';
+    }
+  } catch (e) {
+    el.textContent = 'WhatsApp bridge not reachable yet (' + e.message + '). Start it with docker compose up -d whatsapp-bridge.';
+    qrWrap.style.display = 'none'; repair.style.display = 'none';
+  }
+  if (document.getElementById('connections-panel').style.display !== 'none') {
+    waPollTimer = setTimeout(refreshWhatsAppStatus, 3000);
+  }
+}
+
+document.getElementById('wa-repair').onclick = async () => {
+  if (!confirm('Log out the current WhatsApp link and show a new QR to pair again?')) return;
+  document.getElementById('wa-status').textContent = 'Re-pairing…';
+  try { await fetch('/api/whatsapp/repair', { method: 'POST' }); } catch (e) {}
+  setTimeout(refreshWhatsAppStatus, 2000);
+};
+
+async function refreshWhatsAppChats() {
+  const el = document.getElementById('wa-chats');
+  el.innerHTML = '<span style="color:#777;">Loading…</span>';
+  try {
+    const d = await (await fetch('/api/whatsapp/chats')).json();
+    const chats = (d.chats || []).map(c => ({ title: c.name || c.title, type: c.is_group ? 'group' : 'dm', id: c.jid || c.id }));
+    renderChatList(el, chats, d.note || 'No chats discovered yet.');
+  } catch (e) { el.innerHTML = '<span style="color:#777;">Bridge not available yet.</span>'; }
+}
+document.getElementById('wa-refresh-chats').onclick = refreshWhatsAppChats;
 
 function renderIngestStatus(s) {
   ingestLastStatus = s || {};
@@ -2240,7 +2503,8 @@ function renderIngestStatus(s) {
   if (atBottom) logEl.scrollTop = logEl.scrollHeight;
   runBtn.disabled = s.running;              // any run in progress blocks a new one
   stopBtn.disabled = !s.running || s.stop_requested;
-  const srcLabel = s.source === 'digest' ? 'work digest' : (s.source === 'personal' ? 'personal' : '');
+  const srcLabel = { digest: 'work digest', personal: 'personal',
+                     telegram: 'Telegram', whatsapp: 'WhatsApp' }[s.source] || '';
   if (s.running) {
     statusEl.textContent = s.stop_requested
       ? 'Stopping ' + srcLabel + '...'
@@ -2279,7 +2543,7 @@ document.getElementById('ingest-run').onclick = async () => {
   const dryRun = document.getElementById('ingest-dry-run').checked;
   const body = { dry_run: dryRun };
   let scopeText = '';
-  if (ingestSource === 'personal') {
+  if (WINDOW_SOURCES.includes(ingestSource)) {
     const raw = document.getElementById('ingest-lookback').value.trim();
     const startDate = document.getElementById('ingest-start').value;
     const endDate = document.getElementById('ingest-end').value;
@@ -2300,9 +2564,10 @@ document.getElementById('ingest-run').onclick = async () => {
     }
     if (startDate) body.start_date = startDate;
     if (endDate) body.end_date = endDate;
+    const noun = ingestSource === 'personal' ? 'email' : 'messages';
     scopeText = body.lookback_days != null
-      ? ' for the last ' + body.lookback_days + ' day(s) of email'
-      : (startDate ? ' for email from ' + startDate + ' to ' + (endDate || 'now') : '');
+      ? ' for the last ' + body.lookback_days + ' day(s) of ' + noun
+      : (startDate ? ' for ' + noun + ' from ' + startDate + ' to ' + (endDate || 'now') : '');
   } else {
     const workDate = document.getElementById('ingest-work-date').value;
     if (workDate) { body.work_date = workDate; scopeText = ' for work date ' + workDate; }

@@ -37,10 +37,12 @@ FILING (for each email you decided to FILE):
     line per email: subject -> FILE (target daily note + any topic note, CREATE/UPDATE) or
     SKIP (reason). Then execute it.
 4. Determine that email's DATE from its Received header, and file its entry under
-   that date's daily note - creating the daily note if absent. Different emails in the
-   batch may belong to different daily notes. Use the YYYY-MM-DD (MMM) date format for
-   any date you write, and compute weekdays from the date itself, anchored to the DATE
-   CONTEXT above - never guess a weekday.
+   that date's daily note - creating the daily note if absent. The Received timestamps
+   in the staged batch are already in Singapore time (SGT, UTC+8) - use them as-is; do
+   not apply any further timezone offset. Different emails in the batch may belong to
+   different daily notes. Use the YYYY-MM-DD (MMM) date format for any date you write,
+   and compute weekdays from the date itself, anchored to the DATE CONTEXT above -
+   never guess a weekday.
 5. IDEMPOTENCY: before filing an email, check whether a marker
    <!-- personal-email:MESSAGE-ID --> (the Message-ID exactly as given, WITHOUT its
    surrounding < > angle brackets) already exists in that date's daily note. If it

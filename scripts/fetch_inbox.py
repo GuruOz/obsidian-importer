@@ -20,9 +20,14 @@ Design mirrors fetch_digest.py but for the whole Inbox instead of one sender:
   therefore re-picks-up the same emails next night instead of losing them.
 * Dry runs (DRY_RUN=1) never persist anything: no watermark seed/rewind/advance
   and no lookback state, so a dry run leaves the pipeline exactly as it found it.
-* PERSONAL_MAIL_START_DATE / PERSONAL_MAIL_END_DATE (YYYY-MM-DD, local time,
-  end inclusive) switch the run to an explicit-window backfill: the watermark
-  is bypassed and left untouched, and only the ledger records progress.
+* PERSONAL_MAIL_START_DATE / PERSONAL_MAIL_END_DATE (YYYY-MM-DD, Singapore
+  time, end inclusive) switch the run to an explicit-window backfill: the
+  watermark is bypassed and left untouched, and only the ledger records progress.
+
+Timestamps: Graph filters and the watermark files stay in UTC ("...Z") - Graph
+compares in UTC and lexical order of the Z-strings is chronological. Only the
+timestamps *displayed* in the staged markdown and the calendar-day boundaries of
+the explicit window are converted to Singapore time (see tzutil.py).
 
 Exit codes (consumed by run-ingest.sh):
     0   staged one or more emails successfully
@@ -43,6 +48,7 @@ from graph_mail import (
     html_to_markdown,
     resolve_folder_id,
 )
+from tzutil import fmt_local, local_date_to_utc_iso, now_local, today_local
 
 # Per-email body cap. Long threads/quoted history are truncated with a notice so
 # a single verbose email can't dominate the agent's context budget.
@@ -57,10 +63,6 @@ MAX_LIST_PAGES = 10
 
 def utc_iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def now_utc_iso():
-    return utc_iso(datetime.now(timezone.utc))
 
 
 def lookback_start_iso(days):
@@ -142,7 +144,7 @@ def resolve_watermark(watermark_file, lookback_days, dry_run):
 def read_window():
     """Parse the optional explicit ingestion window from
     PERSONAL_MAIL_START_DATE / PERSONAL_MAIL_END_DATE (YYYY-MM-DD, interpreted
-    in the container's local timezone, end date inclusive).
+    as Singapore calendar days, end date inclusive).
 
     Returns (start_iso, end_exclusive_iso) in UTC, or (None, None) when no
     window is set. When a window is active the watermark is bypassed entirely
@@ -157,20 +159,21 @@ def read_window():
     if not start_raw:
         sys.exit("PERSONAL_MAIL_END_DATE requires PERSONAL_MAIL_START_DATE to be set too.")
 
-    def parse_date(raw, name):
+    def check(raw, name):
         try:
-            return datetime.strptime(raw, "%Y-%m-%d").astimezone()
+            datetime.strptime(raw, "%Y-%m-%d")
         except ValueError:
             sys.exit(f"{name} must be YYYY-MM-DD, got {raw!r}")
 
-    start_local = parse_date(start_raw, "PERSONAL_MAIL_START_DATE")
-    start_iso = utc_iso(start_local.astimezone(timezone.utc))
+    check(start_raw, "PERSONAL_MAIL_START_DATE")
+    # SGT midnight -> UTC instant, so the window means Singapore calendar days.
+    start_iso = local_date_to_utc_iso(start_raw)
     end_iso = None
     if end_raw:
-        end_local = parse_date(end_raw, "PERSONAL_MAIL_END_DATE")
-        if end_local < start_local:
+        check(end_raw, "PERSONAL_MAIL_END_DATE")
+        if end_raw < start_raw:  # lexical order == chronological for YYYY-MM-DD
             sys.exit(f"PERSONAL_MAIL_END_DATE ({end_raw}) is before PERSONAL_MAIL_START_DATE ({start_raw}).")
-        end_iso = utc_iso((end_local + timedelta(days=1)).astimezone(timezone.utc))
+        end_iso = local_date_to_utc_iso(end_raw, end_exclusive=True)
     return start_iso, end_iso
 
 
@@ -194,7 +197,10 @@ def message_to_section(index, message):
     from_addr = frm.get("address", "") or ""
     from_line = f"{from_name} <{from_addr}>".strip() if from_addr else (from_name or "(unknown sender)")
     subject = message.get("subject", "") or "(no subject)"
-    received = message.get("receivedDateTime", "") or ""
+    received_raw = message.get("receivedDateTime", "") or ""
+    # Graph returns UTC; show Singapore wall-clock so the agent files under the
+    # correct local day (the Message-ID below stays the dedup key regardless).
+    received = f"{fmt_local(received_raw)} SGT" if received_raw else ""
     msg_id = message.get("internetMessageId", "") or ""
 
     header = (
@@ -314,8 +320,8 @@ def main():
 
     sections = [message_to_section(i + 1, m) for i, m in enumerate(staged)]
     combined = (
-        f"# Personal inbox batch — fetched {now_utc_iso()}\n\n"
-        f"{len(staged)} email(s) since watermark {watermark}.\n\n---\n\n"
+        f"# Personal inbox batch — fetched {now_local():%Y-%m-%d %H:%M} SGT\n\n"
+        f"{len(staged)} email(s) since watermark {fmt_local(watermark)} SGT.\n\n---\n\n"
         + "\n---\n\n".join(sections)
     )
 
@@ -323,7 +329,7 @@ def main():
     with open(combined_path, "w", encoding="utf-8") as f:
         f.write(combined)
 
-    today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+    today = today_local()
     archive_path = os.path.join(staging_dir, "archive", f"{today}.md")
     with open(archive_path, "w", encoding="utf-8") as f:
         f.write(combined)

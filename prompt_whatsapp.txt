@@ -1,0 +1,74 @@
+You are triaging and filing tonight's batch of WhatsApp chat activity into this Obsidian vault.
+
+{{DATE_CONTEXT}}
+
+1. Read the staged batch at /work/staging/whatsapp/whatsapp.md. It contains one section
+   per "chat-day" - one conversation (a person or a group) on one Singapore
+   calendar date. Each section is headed:
+     ## Chat: <name> — YYYY-MM-DD
+     Section-ID: whatsapp:<chat-jid>:<date>
+     Type: dm | group
+   followed by that chat-day's messages as "- [HH:MM] <sender>: <text>" lines. All times
+   are already Singapore time (SGT) - use dates/times as-is, no timezone offset. "Me" is you.
+2. Follow the vault conventions from Filing_Rules.md, provided in your system prompt if the
+   file exists - it documents the folder taxonomy, daily-note format, tag vocabulary, and
+   create-vs-update rule.
+3. Read /work/staging/whatsapp/vault_index.txt - a complete current list of every note as
+   "YYYY-MM-DD<TAB>path" (last-modified date). Use it as your primary create-vs-update tool:
+   shortlist candidate notes by title/folder, then Read only those. A recently-modified note
+   whose title matches an ongoing matter is likely the note to continue. Never copy the date
+   column into a filename or wikilink.
+   - Also read /work/staging/whatsapp/recent_filing_log.md if present: it shows which notes
+     recent runs filed into, so an ongoing thread keeps landing in one note.
+   - Use search_relevant (thematic search) for an ongoing matter whose note title doesn't
+     match the chat wording. Use grep_search only for exact identifiers.
+
+TRIAGE (decide per chat-day section, before filing anything):
+   - SKIP pure noise: idle chit-chat, greetings, reactions/stickers with no content,
+     spam, and broadcast/forwarded content with no personal relevance.
+   - FILE anything with lasting significance: decisions, plans and bookings, commitments,
+     deadlines, action items (yours or others'), meaningful personal correspondence,
+     shared links/documents worth keeping, and factual information you'd want a record of.
+   - When genuinely unsure, FILE it: a false skip loses information permanently. But record
+     every skip with its reason.
+
+FILING (for each chat-day section you decided to FILE):
+4a. PLAN BEFORE WRITING: write a filing plan to /work/staging/whatsapp/plan.md first - one
+    line per section: "<chat> <date> -> FILE (target daily note + any topic note,
+    CREATE/UPDATE) or SKIP (reason)". Then execute it.
+4. File each section's content under ITS OWN date's daily note (the date in the section
+   header) - creating the daily note if absent. Different sections may belong to different
+   daily notes. SUMMARIZE the conversation faithfully rather than transcribing every line:
+   capture who said what that matters, decisions, commitments, action items, dates, amounts,
+   names, and any shared links - but you MUST NOT drop a substantive detail. For a group,
+   note the participants involved. Use the YYYY-MM-DD (MMM) date format for any date you
+   write; compute weekdays from the date itself, anchored to the DATE CONTEXT - never guess.
+5. IDEMPOTENCY: before filing a section, check whether its marker
+   <!-- whatsapp:<chat-id>:<date> --> (exactly the Section-ID value) already exists in that
+   date's daily note. If it does, treat the section as already filed and skip it (count it
+   under skipped with reason "already filed"). Otherwise append the marker on its own line
+   together with the entry you file, so a re-run never double-files the same chat-day.
+   - **DATA PRESERVATION RULE (LOSSLESS)**: preserve substantive details - identifiers,
+     amounts, dates, names, exact quotes, concrete action items, and shared links. Only omit
+     true noise (stickers, "ok"/"haha" filler, greetings).
+   - **NOTE GRANULARITY RULE**: when a section belongs in a topic/project note, use a highly
+     specific title for the exact matter; never fold a distinct matter into a generic
+     umbrella note. Create a new specific note unless it is a direct continuation of that
+     *exact same* matter. Link related people/threads with `[[Note Title]]`.
+   - **FILENAME RULE**: note titles become filenames and wikilink targets. Never use the
+     characters # ^ | [ ] : \ / in a note title.
+   - **EXACT-TITLE LINK RULE**: when linking to an EXISTING note, copy its title
+     character-for-character from vault_index.txt - never retype it from the chat wording.
+   - **LINK INTEGRITY RULE**: if you write a `[[New Note Title]]` link, you MUST also create
+     that note file and populate it with real context; never leave a dangling link.
+6. Append only. Never rewrite, reorder, or delete existing content in any note.
+7. Work efficiently: don't re-read files you've already read, batch independent edits, and
+   keep commentary between tool calls to a minimum.
+8. Use your available tools (read, glob, grep, edit, write, search_relevant) to perform this task.
+9. When finished, call the finish tool with:
+   {"status": "filed" | "no_content", "work_dates": ["YYYY-MM-DD", ...], "files_touched": [...],
+    "sections_filed": N, "skipped": M, "skipped_details": ["<chat> <date> — <reason>", ...],
+    "notes_created": [...], "notes_updated": [...]}
+   - sections_filed = chat-day sections actually filed; skipped = sections triaged out or
+     already filed; work_dates = every date you filed under. Set status to "no_content" only
+     if the whole batch was skipped (nothing filed).

@@ -26,9 +26,9 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    email and they may describe DIFFERENT days - e.g. yesterday's summary sent late
    plus today's. For each DIGEST section, read its own stated date (a "Work Log -
    <DD Mon YYYY>" style line in the body; if absent, fall back to that section's
-   "Digest received" timestamp converted to local Singapore time). For each AD-HOC
+   "Digest received" timestamp, which is already in Singapore time). For each AD-HOC
    NOTE section, use a date clearly stated in the note body if there is one,
-   otherwise its "received" timestamp converted to local Singapore time. Propose
+   otherwise its "received" timestamp, which is already in Singapore time. Propose
    filing each section's content under ITS OWN date's daily note with its own
    idempotency marker. Never merge two sections with different stated dates under
    one date, and do not use today's date if a section's work date differs from it.

@@ -6,3 +6,7 @@ openai==2.44.0
 flask==3.0.3
 waitress==3.0.0
 rank_bm25==0.2.2
+telethon==1.36.0
+# zoneinfo fallback data - guarantees ZoneInfo("Asia/Singapore") resolves even
+# if the OS tzdata package is ever missing (see scripts/tzutil.py).
+tzdata==2024.1

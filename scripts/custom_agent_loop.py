@@ -10,6 +10,8 @@ import traceback
 from datetime import datetime
 from openai import OpenAI
 
+from tzutil import now_local
+
 # Environment setup
 VAULT_DIR = os.path.normpath(os.environ.get("VAULT_DIR", "/vault"))
 STAGING_DIR = os.path.normpath(os.environ.get("STAGING_DIR", "/work/staging"))
@@ -38,7 +40,7 @@ def _vlog(msg):
     simulator tab, the settings-page ingestion log, and the per-run
     agent.<source>.<date>.json files all surface, so every step of a run is
     reconstructable after the fact."""
-    print(f"[{datetime.now():%H:%M:%S}] {msg}", file=sys.stderr, flush=True)
+    print(f"[{now_local():%H:%M:%S}] {msg}", file=sys.stderr, flush=True)
 
 
 def _one_line(text, max_len=300):
@@ -359,8 +361,8 @@ def render_prompt(prompt):
     """
     if "{{DATE_CONTEXT}}" not in prompt:
         return prompt
-    now = datetime.now()
-    ctx = f"DATE CONTEXT: today is {now:%Y-%m-%d} ({now:%A})."
+    now = now_local()
+    ctx = f"DATE CONTEXT: today is {now:%Y-%m-%d} ({now:%A}), Singapore time (SGT)."
     work_date = os.environ.get("WORK_DATE", "").strip()
     if work_date:
         try:

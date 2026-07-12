@@ -3,5 +3,9 @@
 # Personal inbox triage, offset an hour after the digest (they share a vault lock,
 # so the offset just avoids one waiting on the other).
 30 22 * * * /app/scripts/run-ingest.sh personal >> /work/logs/cron.log 2>&1
+# Telegram chat filing, after personal (all sources serialize on the vault lock).
+0 23 * * * /app/scripts/run-ingest.sh telegram >> /work/logs/cron.log 2>&1
+# WhatsApp chat filing, after Telegram.
+30 23 * * * /app/scripts/run-ingest.sh whatsapp >> /work/logs/cron.log 2>&1
 # Weekly review note, Sunday 20:00 (before the nightly digest run)
 0 20 * * 0 /app/scripts/run-weekly.sh >> /work/logs/cron.log 2>&1

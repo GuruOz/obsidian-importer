@@ -15,8 +15,11 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 
 from rank_bm25 import BM25Okapi
+
+from tzutil import APP_TZ
 
 _TOKEN_RE = re.compile(r"\w+")
 _HEADING_RE = re.compile(r"^##\s+(.*)$", re.MULTILINE)
@@ -58,11 +61,16 @@ SEARCH_RELEVANT_TOOL = {
 
 
 def _parse_date(s):
-    """YYYY-MM-DD -> unix seconds (local midnight), or None if unparseable."""
+    """YYYY-MM-DD -> unix seconds (Singapore midnight), or None if unparseable.
+
+    Uses the app timezone explicitly (not the C library's local time) so date
+    filtering is correct even if the OS tzdata package is missing - mtimes it's
+    compared against are epoch seconds, so the boundary must be a real instant.
+    """
     if not s or not isinstance(s, str):
         return None
     try:
-        return time.mktime(time.strptime(s.strip(), "%Y-%m-%d"))
+        return datetime.strptime(s.strip(), "%Y-%m-%d").replace(tzinfo=APP_TZ).timestamp()
     except (ValueError, OverflowError):
         return None
 

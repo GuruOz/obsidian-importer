@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Always-on Baileys bridge: captures WhatsApp history + live messages into a JSONL store for the Obsidian pipeline to file nightly.",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "6.7.9",
+    "qrcode": "1.5.4",
+    "pino": "9.5.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

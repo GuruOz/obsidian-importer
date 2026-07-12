@@ -30,8 +30,9 @@ TRIAGE (decide per email):
    - When genuinely unsure, FILE it. But record every skip with its reason.
 
 PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed.md):
-4. For each email you would FILE: determine its DATE from the Received header, and
-   decide exactly where it would be filed - which date's daily note (created if absent)
+4. For each email you would FILE: determine its DATE from the Received header (the
+   Received timestamps are already in Singapore time (SGT, UTC+8) - use them as-is, no
+   further offset), and decide exactly where it would be filed - which date's daily note (created if absent)
    and which topic/project note (existing UPDATE or new CREATE, with an idempotency
    marker <!-- personal-email:MESSAGE-ID --> (the Message-ID exactly as given, WITHOUT
    its surrounding < > angle brackets) and `[[links]]` to related notes). Use

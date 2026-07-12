@@ -10,7 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         util-linux \
         procps \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Default the container timezone to Singapore. docker-compose also sets TZ, but
+# baking a default in means `date`, supercronic cron-field interpretation, and
+# Python local-time calls resolve to SGT even if the compose env is missing.
+# (Before this, python:3.12-slim shipped no tzdata, so TZ silently fell back to
+# UTC and the "21:30 SGT" cron actually fired at 21:30 UTC = 05:30 SGT.)
+ENV TZ=Asia/Singapore
 
 RUN curl -fsSL "${SUPERCRONIC_URL}" -o /usr/local/bin/supercronic \
     && echo "${SUPERCRONIC_SHA1SUM}  /usr/local/bin/supercronic" | sha1sum -c - \
@@ -23,7 +31,9 @@ RUN python3 -m pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/ ./scripts/
 COPY prompt_template.txt prompt_dry_run.txt prompt_vault_profile.txt prompt_weekly_rollup.txt \
-     prompt_personal_email.txt prompt_personal_email_dry_run.txt ./
+     prompt_personal_email.txt prompt_personal_email_dry_run.txt \
+     prompt_telegram.txt prompt_telegram_dry_run.txt \
+     prompt_whatsapp.txt prompt_whatsapp_dry_run.txt ./
 COPY crontab ./crontab
 
 RUN chmod +x scripts/*.sh
