@@ -314,8 +314,9 @@ fetcher exits 30 — just **Re-pair** from the Connections page.
 
 - **Updating:** run `./update.sh`. It pulls the latest code (fast-forward only — refuses
   to run with local changes), reports exactly which commits came in, flags any drift
-  between `.env` and `.env.example` (missing new keys, stale dead ones), rebuilds and
-  restarts the `pipeline` container, then verifies the new image took and that
+  between `.env` and `.env.example` (missing new keys, stale dead ones), rebuilds the
+  `pipeline` and `whatsapp-bridge` images and restarts the containers, then verifies
+  the new image took and that
   `VAULT_DIR` still resolves to a populated vault with `Filing_Rules.md` present.
 - **Windows hosts:** enable "Start Docker Desktop when you sign in" in Docker Desktop
   settings, so the always-on guarantee survives reboots.

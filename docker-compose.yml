@@ -21,6 +21,10 @@ services:
   pipeline:
     build: .
     image: copilot-digest-pipeline:latest
+    # Locally-built image (exists in no registry). Without this, `docker compose
+    # up`/`pull` tries to pull it first and warns before falling back to build;
+    # `build` makes the local build authoritative and skips the pull attempt.
+    pull_policy: build
     container_name: copilot-digest-pipeline
     env_file:
       - .env
@@ -58,6 +62,9 @@ services:
   whatsapp-bridge:
     build: ./bridge
     image: copilot-digest-whatsapp-bridge:latest
+    # Locally-built image (see pipeline above) - build it instead of attempting a
+    # registry pull that always fails with "pull access denied".
+    pull_policy: build
     container_name: copilot-digest-whatsapp-bridge
     env_file:
       - .env
