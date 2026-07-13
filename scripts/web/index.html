@@ -484,6 +484,16 @@
           <button id="ingest-stop" style="background: #8b2d2d; color: white; padding: 0.6rem 1.2rem; border-radius: 6px; border: none; font-weight: bold; cursor: pointer;" disabled>Stop</button>
           <span id="ingest-status" style="color: #888; font-size: 0.9rem;"></span>
         </div>
+        <details id="ledger-tool" style="margin-top: 0.9rem;">
+          <summary style="cursor:pointer; color:#8ab; font-size:0.9rem;">Processed-IDs ledger — remove an entry to re-process it</summary>
+          <p class="form-comment" style="margin:0.5rem 0;">The ledger records every message already filed for the selected source; the fetcher skips anything listed here. Remove an entry and the next ingestion run picks that message up again. The pre-change ledger is kept as a .bak next to it.</p>
+          <div style="display:flex; gap:0.6rem; align-items:center; margin-bottom:0.5rem; flex-wrap:wrap;">
+            <button id="ledger-load" style="background:#2b5797; color:white; padding:0.4rem 0.9rem; border:none; border-radius:6px; cursor:pointer;">Load last 100</button>
+            <button id="ledger-remove" style="background:#8b2d2d; color:white; padding:0.4rem 0.9rem; border:none; border-radius:6px; cursor:pointer;" disabled>Remove selected</button>
+            <span id="ledger-status" class="form-comment"></span>
+          </div>
+          <div id="ledger-list" style="display:none; max-height:260px; overflow-y:auto; flex-direction:column; gap:2px; font-family:monospace; font-size:0.78rem; background:#0a0a0a; border:1px solid #333; border-radius:6px; padding:0.5rem;"></div>
+        </details>
       </div>
       <h3 style="margin: 0.5rem 0;">Execution Log</h3>
       <div id="ingest-log" style="flex: 1; min-height: 200px; background: #000; padding: 1rem; border-radius: 8px; border: 1px solid #333; color: #bbb; white-space: pre-wrap; font-family: monospace; font-size: 0.8rem; overflow-y: auto;"></div>
@@ -2185,9 +2195,14 @@ document.getElementById('settings-save').onclick = async () => {
     if (needsRestart && confirm('Saved. A restart is required for the changes to take effect. Restart now?')) {
       status.textContent = 'Restarting...';
       const rres = await fetch('/api/system/restart', { method: 'POST' });
-      status.textContent = rres.ok
-        ? 'Restart initiated. Give it a few seconds, then refresh the page.'
-        : 'Failed to restart.';
+      if (rres.ok) {
+        status.textContent = 'Restart initiated. Give it a few seconds, then refresh the page.';
+      } else {
+        // e.g. refused because an ingestion run is in progress (HTTP 409) -
+        // the save itself succeeded; only the restart was declined.
+        const err = (await rres.json().catch(() => ({}))).error;
+        status.textContent = err || 'Failed to restart.';
+      }
     }
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -2313,8 +2328,73 @@ async function syncIngestSourceUI() {
     dryComment.textContent = "Propose only (staging/" + ingestSource + "/proposed.md), don't write to "
       + "the vault. Dry runs leave the ledger and watermark untouched. Single pass only (drain has no effect).";
   }
+  ledgerReset();  // the loaded list belongs to the previously selected source
 }
 document.querySelectorAll('input[name="ingest-source"]').forEach(r => { r.onchange = syncIngestSourceUI; });
+
+// --- Processed-IDs ledger tool (view/remove entries for the selected source) ---
+function ledgerSelection() {
+  return Array.from(document.querySelectorAll('#ledger-list input[type="checkbox"]:checked'))
+    .map(cb => cb.dataset.id);
+}
+function syncLedgerRemoveBtn() {
+  document.getElementById('ledger-remove').disabled = ledgerSelection().length === 0;
+}
+function ledgerReset() {
+  const list = document.getElementById('ledger-list');
+  if (!list) return;
+  list.innerHTML = ''; list.style.display = 'none';
+  document.getElementById('ledger-status').textContent = '';
+  document.getElementById('ledger-remove').disabled = true;
+}
+
+async function ledgerLoad() {
+  const status = document.getElementById('ledger-status');
+  const list = document.getElementById('ledger-list');
+  status.textContent = 'Loading…';
+  try {
+    const r = await (await fetch('/api/ledger/' + ingestSource + '?limit=100')).json();
+    if (r.error) { status.textContent = r.error; return; }
+    list.innerHTML = '';
+    (r.entries || []).slice().reverse().forEach(id => {  // newest first
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex; gap:0.5rem; align-items:baseline; cursor:pointer;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.dataset.id = id; cb.onchange = syncLedgerRemoveBtn;
+      const span = document.createElement('span');
+      span.textContent = id;
+      span.style.cssText = 'overflow-wrap:anywhere;';
+      row.appendChild(cb); row.appendChild(span);
+      list.appendChild(row);
+    });
+    list.style.display = (r.entries || []).length ? 'flex' : 'none';
+    status.textContent = (r.total === 0)
+      ? 'Ledger is empty - nothing has been processed yet.'
+      : 'Showing ' + (r.entries || []).length + ' of ' + r.total + ' entries, newest first.';
+    syncLedgerRemoveBtn();
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
+}
+document.getElementById('ledger-load').onclick = ledgerLoad;
+
+document.getElementById('ledger-remove').onclick = async () => {
+  const ids = ledgerSelection();
+  if (!ids.length) return;
+  const n = ids.length;
+  if (!confirm('Remove ' + n + ' entr' + (n === 1 ? 'y' : 'ies') + ' from the ' + ingestSource
+      + ' ledger? The next ingestion run will fetch and file these again.')) return;
+  const status = document.getElementById('ledger-status');
+  status.textContent = 'Removing…';
+  try {
+    const res = await fetch('/api/ledger/' + ingestSource + '/remove', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    const r = await res.json();
+    if (!res.ok || r.error) { status.textContent = r.error || 'Remove failed.'; return; }
+    status.textContent = 'Removed ' + r.removed + ' (backup: ' + r.backup + '). Reloading…';
+    await ledgerLoad();
+  } catch (e) { status.textContent = 'Error: ' + e.message; }
+};
 
 function showIngestPanel() {
   document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));

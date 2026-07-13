@@ -361,6 +361,73 @@ def manage_setting(filename):
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+# --- Processed-IDs ledgers: view + selectively remove entries so a message can
+# be re-processed by the next run. Path resolution mirrors run-ingest.sh (the
+# per-source *_LEDGER_FILE override, then the source default); the pipeline's
+# /work is ./data on the host, i.e. /host/data from this container. ---
+LEDGER_SOURCES = {
+    "digest": ("DIGEST_LEDGER_FILE", None),  # digest also honors the global LEDGER_FILE
+    "personal": ("PERSONAL_MAIL_LEDGER_FILE", "/work/personal_processed_ids.txt"),
+    "telegram": ("TELEGRAM_LEDGER_FILE", "/work/telegram_processed_ids.txt"),
+    "whatsapp": ("WHATSAPP_LEDGER_FILE", "/work/whatsapp_processed_ids.txt"),
+}
+
+
+def _ledger_path(source):
+    var, default = LEDGER_SOURCES[source]
+    if source == "digest":
+        default = os.environ.get("LEDGER_FILE") or "/work/processed_ids.txt"
+    path = os.environ.get(var) or default
+    if path.startswith("/work/"):
+        path = os.path.join(HOST_DIR, "data", path[len("/work/"):])
+    return path
+
+
+@app.route("/api/ledger/<source>")
+def ledger_view(source):
+    if source not in LEDGER_SOURCES:
+        return jsonify({"error": f"unknown source {source!r}"}), 400
+    try:
+        limit = min(max(int(request.args.get("limit", 100)), 1), 1000)
+    except ValueError:
+        limit = 100
+    path = _ledger_path(source)
+    if not os.path.exists(path):
+        return jsonify({"source": source, "total": 0, "entries": []})
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"source": source, "total": len(lines), "entries": lines[-limit:]})
+
+
+@app.route("/api/ledger/<source>/remove", methods=["POST"])
+def ledger_remove(source):
+    import shutil
+    if source not in LEDGER_SOURCES:
+        return jsonify({"error": f"unknown source {source!r}"}), 400
+    body = request.get_json(force=True, silent=True) or {}
+    ids = {i.strip() for i in (body.get("ids") or []) if isinstance(i, str) and i.strip()}
+    if not ids:
+        return jsonify({"error": "ids is required (exact ledger lines to remove)"}), 400
+    path = _ledger_path(source)
+    if not os.path.exists(path):
+        return jsonify({"error": "ledger file not found"}), 404
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        kept = [ln for ln in lines if ln not in ids]
+        # One-step undo: the pre-change ledger survives as <ledger>.bak.
+        shutil.copyfile(path, path + ".bak")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "removed": len(lines) - len(kept), "total": len(kept),
+                    "backup": os.path.basename(path) + ".bak"})
+
+
 # Pipeline logs live at /work/logs in the pipeline container = ./data/logs on
 # the host = /host/data/logs here (the project root is mounted at /host).
 LOGS_DIR = os.path.join(HOST_DIR, "data", "logs")
@@ -1019,8 +1086,37 @@ def now_ts_label():
     return now_local().strftime("%Y%m%d-%H%M%S")
 
 
+INGEST_LOCK_FILE = os.path.join(HOST_DIR, "data", "ingest.lock")
+
+
+def _ingest_lock_held():
+    """True while any run-ingest.sh (cron-started or dashboard-started) holds
+    the shared vault lock. ./data/ingest.lock is the same inode in every
+    container that bind-mounts it, so a flock taken inside the pipeline
+    container is observable from here with a non-blocking probe."""
+    import fcntl
+    if not os.path.exists(INGEST_LOCK_FILE):
+        return False
+    try:
+        with open(INGEST_LOCK_FILE, "r+") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        return False
+
+
 @app.route("/api/system/restart", methods=["POST"])
 def system_restart():
+    with INGEST_LOCK:
+        web_run_active = INGEST_STATE["running"]
+    if web_run_active or _ingest_lock_held():
+        return jsonify({"error": "An ingestion run is in progress - restart refused so it "
+                        "isn't killed mid-write. Wait for it to finish (or stop it from the "
+                        "Run Ingestion page), then save/restart again."}), 409
     try:
         subprocess.Popen([
             "curl", "-s", "--unix-socket", "/var/run/docker.sock",
