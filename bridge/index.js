@@ -172,6 +172,25 @@ function appendMessages(msgs) {
 let reconnectDelay = 1000
 const MAX_RECONNECT_DELAY = 60000
 
+// A start() rejection with no .catch would crash the process (exit 1) and put
+// the container in a docker restart loop; every (re)start goes through here so
+// failures always land in a logged retry instead.
+function scheduleStart(delayMs) {
+  setTimeout(() => {
+    start().catch((e) => {
+      logger.error(e)
+      writeStatus('error', { error: String(e?.message || e) })
+      scheduleStart(5000)
+    })
+  }, delayMs)
+}
+
+// Baileys occasionally rejects promises nobody awaits (ws sends after close,
+// history-sync decode errors); log them instead of letting Node exit 1.
+process.on('unhandledRejection', (err) => {
+  logger.error(err, 'unhandled rejection (bridge kept alive)')
+})
+
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
   const { version } = await fetchLatestBaileysVersion()
@@ -211,7 +230,7 @@ async function start() {
       }
       writeStatus('connecting', { reconnect_in_ms: reconnectDelay })
       logger.warn(`connection closed (code ${code}); reconnecting in ${reconnectDelay}ms`)
-      setTimeout(start, reconnectDelay)
+      scheduleStart(reconnectDelay)
       reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY)
     }
   })
@@ -240,8 +259,4 @@ async function start() {
 
 writeStatus('connecting')
 flushChats()
-start().catch((e) => {
-  logger.error(e)
-  writeStatus('error', { error: String(e?.message || e) })
-  setTimeout(start, 5000)
-})
+scheduleStart(0)

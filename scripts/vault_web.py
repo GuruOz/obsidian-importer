@@ -777,6 +777,13 @@ def telegram_status():
                         "error": "Set TELEGRAM_API_ID and TELEGRAM_API_HASH in Settings first."})
 
     def op():
+        with TELEGRAM_LOGIN_LOCK:
+            login_active = TELEGRAM_LOGIN.get("client") is not None
+        if login_active:
+            # A sign-in is mid-flight and its client holds the SQLite session
+            # file open; a second client on the same file raises "database is
+            # locked", so report without touching the session.
+            return {"configured": True, "authorized": False, "login_in_progress": True}
         client = _telegram_client()
         client.connect()
         try:
@@ -801,19 +808,33 @@ def telegram_login_start():
         return jsonify({"error": "phone is required (international format, e.g. +6591234567)"}), 400
 
     def op():
-        client = _telegram_client()
-        client.connect()
-        if client.is_user_authorized():
-            client.disconnect()
-            return {"already_authorized": True}
-        sent = client.send_code_request(phone)
+        # Tear down any client left over from a previous attempt BEFORE opening
+        # a new one: two Telethon clients on the same SQLite session file is
+        # what raises "database is locked".
         with TELEGRAM_LOGIN_LOCK:
             old = TELEGRAM_LOGIN.get("client")
-            if old is not None:
-                try:
-                    old.disconnect()
-                except Exception:  # noqa: BLE001
-                    pass
+            TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
+        if old is not None:
+            try:
+                old.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        client = _telegram_client()
+        try:
+            client.connect()
+            if client.is_user_authorized():
+                client.disconnect()
+                return {"already_authorized": True}
+            sent = client.send_code_request(phone)
+        except BaseException:
+            # A leaked connected client would hold the session DB open and
+            # wedge every later attempt with "database is locked".
+            try:
+                client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+        with TELEGRAM_LOGIN_LOCK:
             TELEGRAM_LOGIN.update(phone=phone, phone_code_hash=sent.phone_code_hash, client=client)
         return {"ok": True, "code_sent": True}
     try:
@@ -841,11 +862,18 @@ def telegram_login_code():
             client.sign_in(phone=phone, code=code, phone_code_hash=pch)
         except SessionPasswordNeededError:
             return {"needs_password": True}
-        name = _me_name(client.get_me())
-        _tg_dump_chats(client)
-        client.disconnect()
-        with TELEGRAM_LOGIN_LOCK:
-            TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
+        # Signed in: release the client even if the post-login extras fail, or
+        # it would hold the session DB open ("database is locked" elsewhere).
+        try:
+            name = _me_name(client.get_me())
+            _tg_dump_chats(client)
+        finally:
+            try:
+                client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            with TELEGRAM_LOGIN_LOCK:
+                TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
         return {"ok": True, "authorized": True, "name": name}
     try:
         return jsonify(_tg_run(op))
@@ -866,11 +894,17 @@ def telegram_login_password():
 
     def op():
         client.sign_in(password=password)
-        name = _me_name(client.get_me())
-        _tg_dump_chats(client)
-        client.disconnect()
-        with TELEGRAM_LOGIN_LOCK:
-            TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
+        # Same as the code step: never keep the client past a successful login.
+        try:
+            name = _me_name(client.get_me())
+            _tg_dump_chats(client)
+        finally:
+            try:
+                client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+            with TELEGRAM_LOGIN_LOCK:
+                TELEGRAM_LOGIN.update(phone=None, phone_code_hash=None, client=None)
         return {"ok": True, "authorized": True, "name": name}
     try:
         return jsonify(_tg_run(op))

@@ -71,6 +71,9 @@ services:
   # no build: block of its own - just a different command.
   vault-qa:
     image: copilot-digest-pipeline:latest
+    # The image is built locally by the pipeline service - it isn't on any
+    # registry, so `docker compose pull` must never try to fetch it.
+    pull_policy: never
     container_name: copilot-digest-vault-qa
     depends_on:
       - pipeline

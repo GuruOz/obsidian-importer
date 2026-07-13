@@ -2371,7 +2371,8 @@ async function refreshTelegramStatus() {
       el.textContent = '✓ Connected as ' + (s.name || 'your account') + '.';
       relogin.style.display = '';
     } else {
-      el.textContent = s.error ? ('Not connected: ' + s.error) : 'Not connected.';
+      el.textContent = s.login_in_progress ? 'Sign-in in progress — re-enter your phone to restart it.'
+        : (s.error ? ('Not connected: ' + s.error) : 'Not connected.');
       form.style.display = 'flex'; tgSetStep('phone');
     }
   } catch (e) { el.textContent = 'Error: ' + e.message; }

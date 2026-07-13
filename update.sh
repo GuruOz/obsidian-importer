@@ -52,8 +52,8 @@ else
     echo "WARNING: .env or .env.example not found, skipping drift check."
 fi
 
-echo "==> Rebuilding pipeline image"
-docker compose build pipeline
+echo "==> Rebuilding locally-built images (pipeline, whatsapp-bridge)"
+docker compose build
 
 echo "==> Restarting containers"
 docker compose up -d
