@@ -721,7 +721,18 @@ def ingest_status(source=None):
 # across the multi-step (phone -> code -> password) flow.
 import concurrent.futures  # noqa: E402
 
-_TG_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-login")
+
+def _tg_thread_init():
+    # Telethon's sync API resolves the thread's event loop via
+    # asyncio.get_event_loop(), which on Python 3.10+ raises "There is no
+    # current event loop in thread ..." on any thread that never set one.
+    # Give the dedicated worker thread a loop of its own, once.
+    import asyncio
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+
+_TG_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="tg-login", initializer=_tg_thread_init)
 TELEGRAM_LOGIN_LOCK = threading.Lock()
 TELEGRAM_LOGIN = {"phone": None, "phone_code_hash": None, "client": None}
 
@@ -785,15 +796,21 @@ def telegram_status():
             # locked", so report without touching the session.
             return {"configured": True, "authorized": False, "login_in_progress": True}
         client = _telegram_client()
-        client.connect()
         try:
+            # connect() inside the try: if it fails, the constructed client
+            # still holds the SQLite session open until disconnected, and a
+            # leaked one turns every later call into "database is locked".
+            client.connect()
             authorized = client.is_user_authorized()
             info = {"configured": True, "authorized": authorized}
             if authorized:
                 info["name"] = _me_name(client.get_me())
             return info
         finally:
-            client.disconnect()
+            try:
+                client.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
     try:
         return jsonify(_tg_run(op))
     except Exception as e:  # noqa: BLE001
