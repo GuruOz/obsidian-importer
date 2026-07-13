@@ -11,7 +11,11 @@
 //   status.json           {state, me, last_event_ts, history_sync_done}
 //   qr.png                current pairing QR (present only while waiting_qr)
 
-import makeWASocket, {
+// baileys is plain CommonJS with no "exports" map, so Node's native ESM
+// interop binds a default import to the whole module.exports object (not a
+// function) - only named imports resolve correctly here.
+import {
+  makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
