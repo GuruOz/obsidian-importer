@@ -249,7 +249,13 @@ class HybridIndex:
             def add(idx, rank, tag):
                 if allowed is not None and idx not in allowed:
                     return
-                rrf[idx] = rrf.get(idx, 0.0) + 1.0 / (_RRF_K + rank + 1)
+                w = 1.0 / (_RRF_K + rank + 1)
+                # Mirror the lexical index's raw-archive demotion on the fused
+                # score, or the semantic leg would re-inflate raw dumps the
+                # lexical ranking already pushed down.
+                if lexical_index.is_raw_archive(self.chunks[idx].path):
+                    w *= lexical_index.RAW_ARCHIVE_DEMOTE
+                rrf[idx] = rrf.get(idx, 0.0) + w
                 found_by.setdefault(idx, set()).add(tag)
 
             for rank, (idx, _w, _r) in enumerate(lex_order):

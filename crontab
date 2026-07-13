@@ -7,5 +7,8 @@
 0 23 * * * /app/scripts/run-ingest.sh telegram >> /work/logs/cron.log 2>&1
 # WhatsApp chat filing, after Telegram.
 30 23 * * * /app/scripts/run-ingest.sh whatsapp >> /work/logs/cron.log 2>&1
+# Stitch pass: cross-source correlation of last night's filings, next morning
+# (after all sources are done; before the day starts). See plan.md.
+30 5 * * * /app/scripts/run-stitch.sh >> /work/logs/cron.log 2>&1
 # Weekly review note, Sunday 20:00 (before the nightly digest run)
 0 20 * * 0 /app/scripts/run-weekly.sh >> /work/logs/cron.log 2>&1

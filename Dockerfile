@@ -33,7 +33,8 @@ COPY scripts/ ./scripts/
 COPY prompt_template.txt prompt_dry_run.txt prompt_vault_profile.txt prompt_weekly_rollup.txt \
      prompt_personal_email.txt prompt_personal_email_dry_run.txt \
      prompt_telegram.txt prompt_telegram_dry_run.txt \
-     prompt_whatsapp.txt prompt_whatsapp_dry_run.txt ./
+     prompt_whatsapp.txt prompt_whatsapp_dry_run.txt \
+     prompt_stitch.txt prompt_stitch_dry_run.txt ./
 COPY crontab ./crontab
 
 RUN chmod +x scripts/*.sh

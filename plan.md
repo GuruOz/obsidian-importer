@@ -1,6 +1,8 @@
 # Plan: post-ingestion stitch pass + retrieval hygiene
 
-Decision date: 2026-07-13. Driven by one question: **does a nightly cleanup make
+Decision date: 2026-07-13. **Status: implemented 2026-07-13** (both phases; the
+stitch pass ships in report-only mode - flip `STITCH_APPLY_LINKS=1` in .env once
+the reports look right). Driven by one question: **does a nightly cleanup make
 the chat better?** The chat is the product; the vault is its database. Anything
 that doesn't improve retrieval quality is not worth an agent run.
 

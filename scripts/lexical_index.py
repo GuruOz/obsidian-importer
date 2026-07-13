@@ -30,6 +30,20 @@ _SNIPPET_CHARS = 700
 RECENCY_HALFLIFE_DAYS = float(os.environ.get("VAULT_QA_RECENCY_HALFLIFE_DAYS", "90"))
 RECENCY_FLOOR = float(os.environ.get("VAULT_QA_RECENCY_FLOOR", "0.5"))
 
+# Raw archive folders hold the unprocessed ingestion dumps that live runs copy
+# into the vault (run-ingest.sh's ARCHIVE_SUBDIRs). They stay searchable - they
+# are the ground truth of what was actually said - but demoted, because they are
+# wordy, keyword-rich, and always recent (which the recency boost would otherwise
+# reward), so at similar relevance the distilled note they were filed into should
+# win. 1.0 disables the demotion; 0 effectively excludes raw archives.
+RAW_ARCHIVE_DIRS = ("Raw Digests", "Raw Email", "Raw Chats")
+RAW_ARCHIVE_DEMOTE = max(0.0, float(os.environ.get("VAULT_QA_RAW_DEMOTE", "0.4")))
+
+
+def is_raw_archive(path):
+    top = path.replace("\\", "/").lstrip("/").split("/", 1)[0]
+    return top in RAW_ARCHIVE_DIRS
+
 # Canonical schema for the search_relevant tool. Lives here (not in vault_qa) so
 # the ingestion agent, the CLI, and the chat server all expose the identical tool;
 # vault_qa re-exports it for backwards compatibility.
@@ -156,7 +170,10 @@ class LexicalIndex:
                 continue
             if to_ts is not None and (c.mtime <= 0 or c.mtime >= to_ts):
                 continue
-            weighted.append((i, s * _recency_factor(c.mtime, now), s))
+            factor = _recency_factor(c.mtime, now)
+            if is_raw_archive(c.path):
+                factor *= RAW_ARCHIVE_DEMOTE
+            weighted.append((i, s * factor, s))
         weighted.sort(key=lambda x: -x[1])
         if depth is not None:
             weighted = weighted[:depth]

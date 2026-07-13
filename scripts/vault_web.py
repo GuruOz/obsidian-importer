@@ -276,14 +276,17 @@ EDITABLE_FILES = [
     "prompt_telegram.txt",
     "prompt_telegram_dry_run.txt",
     "prompt_whatsapp.txt",
-    "prompt_whatsapp_dry_run.txt"
+    "prompt_whatsapp_dry_run.txt",
+    "prompt_stitch.txt",
+    "prompt_stitch_dry_run.txt"
 ]
 
 PROPOSED_FILES = [
     "data/staging/proposed.md",
     "data/staging/personal/proposed.md",
     "data/staging/telegram/proposed.md",
-    "data/staging/whatsapp/proposed.md"
+    "data/staging/whatsapp/proposed.md",
+    "data/staging/stitch/proposed.md"
 ]
 
 @app.route("/api/settings")

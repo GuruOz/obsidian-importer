@@ -48,6 +48,8 @@ services:
       - ./prompt_telegram_dry_run.txt:/app/prompt_telegram_dry_run.txt:ro
       - ./prompt_whatsapp.txt:/app/prompt_whatsapp.txt:ro
       - ./prompt_whatsapp_dry_run.txt:/app/prompt_whatsapp_dry_run.txt:ro
+      - ./prompt_stitch.txt:/app/prompt_stitch.txt:ro
+      - ./prompt_stitch_dry_run.txt:/app/prompt_stitch_dry_run.txt:ro
       - ./prompt_vault_profile.txt:/app/prompt_vault_profile.txt:ro
       - ./prompt_weekly_rollup.txt:/app/prompt_weekly_rollup.txt:ro
     restart: unless-stopped
