@@ -1672,6 +1672,7 @@ const CATEGORIES = [
   { name: "Personal Email", blurb: "The nightly triage of your inbox: the agent skips noise (newsletters, OTPs, receipts) and files what matters. Use the Run Email Ingestion action on the left to run it on demand." },
   { name: "Telegram", blurb: "Nightly filing of your Telegram chats via a user session (Telethon). Get an API ID/hash from my.telegram.org, then log in on the Connections page. Include/exclude chats by name; copy exact names from the discovered-chats list." },
   { name: "WhatsApp", blurb: "Nightly filing of your WhatsApp chats. An always-on bridge (Baileys) captures messages after you pair your phone on the Connections page. Include/exclude chats by name. Note: WhatsApp doesn't officially support third-party clients — see the README caveat." },
+  { name: "Stitch", blurb: "Nightly cross-source correlation (05:30 SGT): finds notes filed by different sources that cover the same story and links them. Starts report-only — review a few days of staging/stitch/proposed.md before turning on live links." },
   { name: "Schedule", blurb: "When the automatic jobs run. Times are in the pipeline container's timezone (Asia/Singapore by default). Schedule changes take effect after a restart — you'll be offered one when you save." },
   { name: "AI Model", blurb: "Which AI reads and files your email. Any OpenAI-compatible service works — pick a preset or fill the fields manually. A local Ollama server is free and keeps your email on your own machine." },
   { name: "Notifications", blurb: "Get a phone notification after each run via the free ntfy app. Pick any hard-to-guess topic name, subscribe to the same topic in the app, done. Leave blank to disable." },
@@ -1692,6 +1693,7 @@ const CRON_JOBS = [
   { id: "personal", match: "run-ingest.sh personal", label: "Personal email triage", desc: "Triage-and-file pass over the inbox.", weekly: false },
   { id: "telegram", match: "run-ingest.sh telegram", label: "Telegram chats", desc: "Files the day's Telegram messages.", weekly: false },
   { id: "whatsapp", match: "run-ingest.sh whatsapp", label: "WhatsApp chats", desc: "Files the day's WhatsApp messages.", weekly: false },
+  { id: "stitch", match: "run-stitch.sh", label: "Stitch pass", desc: "Cross-source correlation of the previous night's filings.", weekly: false },
   { id: "weekly", match: "run-weekly.sh", label: "Weekly review note", desc: "Writes the week's rollup note.", weekly: true },
 ];
 const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -1783,6 +1785,11 @@ const envSchema = {
   "WHATSAPP_LLM_BASE_URL": { label: "Base URL", category: "WhatsApp", type: "text", default: "", subhead: "WhatsApp AI override (optional)", desc: "Point WhatsApp filing at a different (even local) model. Blank uses the main AI Model." },
   "WHATSAPP_LLM_API_KEY": { label: "API key", category: "WhatsApp", type: "password", default: "" },
   "WHATSAPP_LLM_MODEL": { label: "Model name", category: "WhatsApp", type: "text", default: "" },
+
+  // Stitch
+  "STITCH_APPLY_LINKS": { label: "Apply links live", category: "Stitch", type: "toggle", default: "0", desc: "Off = report-only: findings land in staging/stitch/proposed.md, the vault is never touched. On = the agent may append \"See also\" cross-links to related notes. Note merges are always proposal-only, in both modes." },
+  "STITCH_MAX_TOPICS": { label: "Notes examined per run", category: "Stitch", type: "number", default: "20", desc: "How many of last night's touched notes it examines (newest first)." },
+  "STITCH_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Stitch", type: "number", default: "40", desc: "Max tool-calling turns the stitch agent gets per run." },
 
   // AI Model
   "LLM_BASE_URL": { label: "Service address (base URL)", category: "AI Model", type: "text", default: "", desc: "The AI provider's OpenAI-compatible endpoint. Use a preset above or paste your provider's URL." },
