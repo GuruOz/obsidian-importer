@@ -1747,11 +1747,11 @@ const envSchema = {
   "DIGEST_SUBJECT_PATTERN": { label: "Subject filter (optional)", category: "Work Digest", type: "text", default: "", desc: "Only subjects matching this pattern count. Leave blank to accept any subject from the sender." },
   "DIGEST_NOTE_SUBJECT_PATTERN": { label: "Ad-hoc note subject filter", category: "Work Digest", type: "text", default: "obsidian note", desc: "Emails from the same sender whose subject matches this are filed as free-form work notes (daily journal + topic notes) instead of being parsed as a daily summary. Route them into the same mail folder. Blank disables ad-hoc notes." },
   "DIGEST_FOLDER": { label: "Mail folder", category: "Work Digest", type: "text", default: "Inbox/CopilotDigest", desc: "The Outlook folder the digest lands in. Use \"Inbox\" if you don't have a rule moving digests into a folder." },
-  "DRY_RUN": { label: "Dry run — propose only", category: "Work Digest", type: "toggle", default: "1", desc: "When on, the digest job writes its filing plan to a proposal (see Review Proposals on the left) instead of changing the vault. Turn off to file for real." },
+  "DRY_RUN": { label: "Dry run — propose only", category: "Work Digest", type: "toggle", default: "1", desc: "When on, the digest job writes its filing plan to a proposal (see Review Proposals on the left) instead of changing the vault. Turn off to file for real. Governs only the work digest — every other source has its own dry-run switch. Saving applies from the next run — no restart needed." },
   "DIGEST_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Work Digest", type: "number", default: "60", desc: "Max tool-calling turns the filing agent gets. Real digests regularly exhaust 30 (the run then shows as \"unreported\" in the Filing Log), so 60 is the recommended working value. More loops = more tokens, but only when used." },
 
   // Personal Email
-  "PERSONAL_MAIL_DRY_RUN": { label: "Dry run — propose only", category: "Personal Email", type: "toggle", default: "1", desc: "Independent of the work digest's dry run, so one can go live while the other still proposes. Dry runs leave no trace — nothing is marked as processed." },
+  "PERSONAL_MAIL_DRY_RUN": { label: "Dry run — propose only", category: "Personal Email", type: "toggle", default: "1", desc: "Independent of the work digest's dry run, so one can go live while the other still proposes. Dry runs leave no trace — nothing is marked as processed. Saving applies from the next run — no restart needed." },
   "PERSONAL_MAIL_MAX_LOOPS": { label: "Agent step budget (loops)", category: "Personal Email", type: "number", default: "30", desc: "Max tool-calling turns the triage/filing agent gets per pass. More loops = more tokens." },
   "PERSONAL_MAIL_FOLDER": { label: "Mail folder", category: "Personal Email", type: "text", default: "Inbox", desc: "The folder to triage. Nested folders are written \"Parent/Child\"." },
   "PERSONAL_MAIL_MAX_PER_RUN": { label: "Max emails per run", category: "Personal Email", type: "number", default: "25", desc: "A backlog drains at this pace per nightly run. The Run Email Ingestion action can drain a whole backlog at once." },
@@ -1760,7 +1760,7 @@ const envSchema = {
   // Telegram
   "TELEGRAM_API_ID": { label: "API ID", category: "Telegram", type: "text", default: "", desc: "From https://my.telegram.org → API development tools. Required to connect." },
   "TELEGRAM_API_HASH": { label: "API hash", category: "Telegram", type: "password", default: "", desc: "The API hash paired with the API ID above. Treated as a secret." },
-  "TELEGRAM_DRY_RUN": { label: "Dry run — propose only", category: "Telegram", type: "toggle", default: "1", desc: "When on, Telegram filing writes a proposal instead of changing the vault. Independent of the other sources." },
+  "TELEGRAM_DRY_RUN": { label: "Dry run — propose only", category: "Telegram", type: "toggle", default: "1", desc: "When on, Telegram filing writes a proposal instead of changing the vault. Independent of the other sources (the Work Digest dry-run switch does not apply here). Saving applies from the next run — no restart needed." },
   "TELEGRAM_INCLUDE_CHATS": { label: "Include chats", category: "Telegram", type: "text", default: "", desc: "Comma-separated chat titles, @usernames, or numeric ids. A non-empty list is an allowlist (only these are filed; named chats override the type toggles below). Copy exact names from the Connections page." },
   "TELEGRAM_EXCLUDE_CHATS": { label: "Exclude chats", category: "Telegram", type: "text", default: "", desc: "Comma-separated titles / @usernames / ids to always skip." },
   "TELEGRAM_INCLUDE_GROUPS": { label: "Include groups", category: "Telegram", type: "toggle", default: "1", desc: "File messages from group chats (one-to-one chats are always included)." },
@@ -1774,8 +1774,8 @@ const envSchema = {
   "TELEGRAM_LLM_MODEL": { label: "Model name", category: "Telegram", type: "text", default: "" },
 
   // WhatsApp
-  "WHATSAPP_DRY_RUN": { label: "Dry run — propose only", category: "WhatsApp", type: "toggle", default: "1", desc: "When on, WhatsApp filing writes a proposal instead of changing the vault. Independent of the other sources." },
-  "WHATSAPP_SYNC_FULL_HISTORY": { label: "Sync full history on pair", category: "WhatsApp", type: "toggle", default: "1", desc: "Ask WhatsApp to send the linked device your full history when you pair. Keep your phone online during the initial sync. Read by the bridge." },
+  "WHATSAPP_DRY_RUN": { label: "Dry run — propose only", category: "WhatsApp", type: "toggle", default: "1", desc: "When on, WhatsApp filing writes a proposal instead of changing the vault. Independent of the other sources (the Work Digest dry-run switch does not apply here). Saving applies from the next run — no restart needed." },
+  "WHATSAPP_SYNC_FULL_HISTORY": { label: "Sync full history on pair", category: "WhatsApp", type: "toggle", default: "1", desc: "Ask WhatsApp to send the linked device your full history when you pair. Keep your phone online during the initial sync. Read by the bridge — applies after `docker compose up -d` on the host." },
   "WHATSAPP_INCLUDE_CHATS": { label: "Include chats", category: "WhatsApp", type: "text", default: "", desc: "Comma-separated chat names or JIDs. A non-empty list is an allowlist. Copy exact names from the Connections page." },
   "WHATSAPP_EXCLUDE_CHATS": { label: "Exclude chats", category: "WhatsApp", type: "text", default: "", desc: "Comma-separated names / JIDs to always skip." },
   "WHATSAPP_INCLUDE_GROUPS": { label: "Include groups", category: "WhatsApp", type: "toggle", default: "1", desc: "File messages from group chats (one-to-one chats are always included)." },
@@ -1798,7 +1798,7 @@ const envSchema = {
   "PERSONAL_MAIL_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Personal email override (optional)", desc: "Personal email can use a different AI than the work digest — e.g. keep personal mail on a local Ollama model for privacy. Leave blank to use the main model above." },
   "PERSONAL_MAIL_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
   "PERSONAL_MAIL_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },
-  "VAULT_QA_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Chat assistant override (optional)", desc: "Use a stronger model for the chat than for nightly filing — chat benefits from a bigger model, filing doesn't. Leave blank to use the main model above. Requires a restart." },
+  "VAULT_QA_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Chat assistant override (optional)", desc: "Use a stronger model for the chat than for nightly filing — chat benefits from a bigger model, filing doesn't. Leave blank to use the main model above. Applies after `docker compose up -d` on the host (the chat service reads its settings at container creation)." },
   "VAULT_QA_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
   "VAULT_QA_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },
   "EMBED_BASE_URL": { label: "Embedding service URL", category: "AI Model", type: "text", default: "", subhead: "Semantic search (optional)", desc: "Turns on meaning-based chat search alongside keyword search, so paraphrased questions still find the right note. Recommended: a local Ollama server (http://host.docker.internal:11434/v1) after `ollama pull nomic-embed-text`. Leave blank to use keyword search only." },
@@ -2174,6 +2174,7 @@ document.getElementById('settings-save').onclick = async () => {
         body: JSON.stringify({ updates })
       });
       if (!res.ok) throw new Error('saving settings failed');
+      dryDefaults = {};  // the run-dialog defaults may just have changed
 
       const cronContent = buildCrontabContent();
       if (cronContent !== null) {
@@ -2184,7 +2185,10 @@ document.getElementById('settings-save').onclick = async () => {
         });
         if (!cres.ok) throw new Error('saving schedule failed');
       }
-      needsRestart = true;
+      // .env settings apply from the next run automatically (the pipeline's
+      // entry scripts re-read the live .env); only the schedule needs a
+      // restart, because supercronic reads the crontab once at startup.
+      needsRestart = cronContent !== null;
     } else {
       const res = await fetch('/api/settings/' + currentSettingFile, {
         method: 'PUT',
@@ -2196,10 +2200,19 @@ document.getElementById('settings-save').onclick = async () => {
       needsRestart = currentSettingFile === 'crontab';
     }
 
-    status.textContent = 'Saved!';
-    setTimeout(() => { if (status.textContent === 'Saved!') status.textContent = ''; }, 2000);
+    if (needsRestart) {
+      status.textContent = 'Saved!';
+      setTimeout(() => { if (status.textContent === 'Saved!') status.textContent = ''; }, 2000);
+    } else {
+      status.textContent = 'Saved. Changes apply from the next run - nightly or manual - '
+        + 'automatically. (Chat-assistant and WhatsApp-bridge settings additionally need '
+        + '"docker compose up -d" on the host.)';
+      setTimeout(() => {
+        if (status.textContent.startsWith('Saved.')) status.textContent = '';
+      }, 8000);
+    }
 
-    if (needsRestart && confirm('Saved. A restart is required for the changes to take effect. Restart now?')) {
+    if (needsRestart && confirm('Saved. The scheduler only re-reads the schedule on restart. Restart now?')) {
       status.textContent = 'Restarting...';
       const rres = await fetch('/api/system/restart', { method: 'POST' });
       if (rres.ok) {
@@ -2289,7 +2302,7 @@ document.getElementById('logs-follow').onchange = (e) => {
 let ingestPollTimer = null;
 let ingestSource = 'personal';
 let ingestLastStatus = {};
-let digestDryDefault = null;
+let dryDefaults = {};   // per-source cache; cleared on save and on panel open
 
 const WINDOW_SOURCES = ['personal', 'telegram', 'whatsapp'];
 const INGEST_TITLES = {
@@ -2303,13 +2316,19 @@ const INGEST_DESC = {
   whatsapp: 'Runs WhatsApp chat filing now, reading messages the always-on bridge has captured. Set a lookback or start/end window to backfill. Pair the phone first on the Connections page; the bridge must be connected.',
 };
 
-async function loadDigestDryDefault() {
-  // The digest dry-run toggle defaults to whatever the nightly job uses (.env DRY_RUN):
-  // absent or "1" => dry-run on; "0" => live.
+const DRY_KEYS = {
+  digest: 'DRY_RUN', personal: 'PERSONAL_MAIL_DRY_RUN',
+  telegram: 'TELEGRAM_DRY_RUN', whatsapp: 'WHATSAPP_DRY_RUN',
+};
+
+async function loadDryDefault(source) {
+  // The dry-run toggle defaults to whatever the nightly job uses (the source's
+  // .env switch): absent or "1" => dry-run on; "0" => live. Mirrors the
+  // ${VAR:-1} resolution in run-ingest.sh.
   try {
     const res = await fetch('/api/settings/.env');
     const data = await res.json();
-    const f = (data.fields || []).find(x => x.type === 'kv' && x.key === 'DRY_RUN');
+    const f = (data.fields || []).find(x => x.type === 'kv' && x.key === DRY_KEYS[source]);
     return !(f && String(f.value).trim() === '0');
   } catch (e) { return true; }
 }
@@ -2324,17 +2343,21 @@ async function syncIngestSourceUI() {
   document.getElementById('ingest-desc').textContent = INGEST_DESC[ingestSource];
   const dry = document.getElementById('ingest-dry-run');
   const dryComment = document.getElementById('ingest-dry-comment');
-  if (ingestSource === 'digest') {
-    if (digestDryDefault === null) digestDryDefault = await loadDigestDryDefault();
-    dry.checked = digestDryDefault;
-    dryComment.textContent = "Propose only (staging/proposed.md), don't write to the vault. "
-      + "Defaults to the nightly Work Digest dry-run setting from Settings"
-      + (digestDryDefault ? " (currently: dry run)." : " (currently: LIVE).");
-  } else {
-    dry.checked = true;
-    dryComment.textContent = "Propose only (staging/" + ingestSource + "/proposed.md), don't write to "
-      + "the vault. Dry runs leave the ledger and watermark untouched. Single pass only (drain has no effect).";
+  if (!(ingestSource in dryDefaults)) {
+    const src = ingestSource;
+    const v = await loadDryDefault(src);
+    dryDefaults[src] = v;
+    if (src !== ingestSource) return;  // user switched source mid-fetch
   }
+  const dryDef = dryDefaults[ingestSource];
+  dry.checked = dryDef;
+  const stagePath = ingestSource === 'digest'
+    ? 'staging/proposed.md' : 'staging/' + ingestSource + '/proposed.md';
+  dryComment.textContent = "Propose only (" + stagePath + "), don't write to the vault. "
+    + (ingestSource === 'digest'
+       ? '' : 'Dry runs leave the ledger and watermark untouched; single pass only (drain has no effect). ')
+    + "Defaults to this source's nightly dry-run setting from Settings"
+    + (dryDef ? " (currently: dry run)." : " (currently: LIVE).");
   ledgerReset();  // the loaded list belongs to the previously selected source
 }
 document.querySelectorAll('input[name="ingest-source"]').forEach(r => { r.onchange = syncIngestSourceUI; });
@@ -2406,6 +2429,7 @@ document.getElementById('ledger-remove').onclick = async () => {
 function showIngestPanel() {
   document.querySelectorAll('.settings-item').forEach(x => x.classList.remove('active'));
   document.getElementById('ingest-action').classList.add('active');
+  dryDefaults = {};  // always reflect the current .env when the panel opens
   currentSettingFile = null;
   document.getElementById('settings-textarea').style.display = 'none';
   document.getElementById('settings-form').style.display = 'none';

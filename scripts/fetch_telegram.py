@@ -366,7 +366,8 @@ def main():
     )
     max_per_run = _int_env("TELEGRAM_MAX_PER_RUN", 500)
     lookback_days = max(_int_env("TELEGRAM_LOOKBACK_DAYS", 0), 0)
-    dry_run = (os.environ.get("DRY_RUN") or env("TELEGRAM_DRY_RUN", "1") or "1") == "1"
+    # Per-source switch wins over the exported global (see fetch_whatsapp.py).
+    dry_run = (os.environ.get("TELEGRAM_DRY_RUN") or os.environ.get("DRY_RUN") or "1") == "1"
 
     include_list = _list_env("TELEGRAM_INCLUDE_CHATS")
     exclude_list = _list_env("TELEGRAM_EXCLUDE_CHATS")

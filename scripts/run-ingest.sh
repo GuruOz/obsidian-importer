@@ -21,6 +21,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOTIFY="${SCRIPT_DIR}/notify.sh"
 
+# Pick up dashboard .env edits without a container recreate. Must run before
+# the case arm below: digest's defaults read the global DRY_RUN there.
+. "${SCRIPT_DIR}/env_refresh.sh"
+refresh_env_from_file /hostro/.env
+
 SOURCE="${1:-}"
 if [ -z "$SOURCE" ]; then
     echo "usage: run-ingest.sh <source> [YYYY-MM-DD]" >&2

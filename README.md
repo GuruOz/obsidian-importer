@@ -88,7 +88,10 @@ LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_MODEL=<provider/model>
 ```
 
-Then `docker compose up -d` again to pick the changes up.
+Then `docker compose up -d` again to pick the changes up. (Pipeline runs re-read
+the live `.env` at run start, so most later edits apply on the next run without
+this — but the chat assistant's `LLM_*`/`VAULT_QA_*` settings and the WhatsApp
+bridge read theirs at container creation and do need the `up -d`.)
 
 ### 5. Authenticate Microsoft Graph
 
@@ -115,8 +118,10 @@ Follow the printed device-code URL to sign in once. The refresh token is cached 
 5. **M4 — Orchestration + safety.** Confirm supercronic fires nightly
    (`docker compose logs -f pipeline` around 21:30 SGT), snapshots appear under
    `data/backups/YYYY-MM-DD/`, and ntfy notifications arrive.
-6. **M5 — Go live.** Set `DRY_RUN=0` in `.env`, `docker compose up -d` to restart the
-   pipeline container with the new setting.
+6. **M5 — Go live.** Set `DRY_RUN=0` in `.env` (or flip **Dry run** off on the
+   dashboard's Work Digest settings card) — the next run picks it up automatically;
+   no restart needed. Note this switch governs only the work digest: personal mail,
+   Telegram, and WhatsApp each have their own `*_DRY_RUN` switch.
 
 ## Vault Profiler (run once, milestone M2)
 
@@ -213,7 +218,9 @@ files the ones worth keeping:
 - **Dry-run by default, independently of the digest.** `PERSONAL_MAIL_DRY_RUN`
   defaults to `1` and does **not** follow the global `DRY_RUN`, so personal mail can
   propose to `data/staging/personal/proposed.md` for a week while the digest keeps
-  filing live. Review the proposals, then set `PERSONAL_MAIL_DRY_RUN=0`.
+  filing live. Review the proposals, then set `PERSONAL_MAIL_DRY_RUN=0` (the
+  dashboard's Personal Email settings card has the toggle; it applies from the
+  next run — no restart needed).
 - **Same safety nets as the digest:** shared vault lock (the two sources never
   touch the vault at once), pre-run snapshot, its own ledger
   (`data/personal_processed_ids.txt`) and watermark
@@ -301,7 +308,10 @@ the session and appends messages to `data/whatsapp/messages/*.jsonl`; the nightl
    (e.g. yesterday). Review `data/staging/<source>/proposed.md`. Then backfill
    history with a **start/end date window** (dry-run first; for Telegram, set
    `TELEGRAM_START_DATE=all` for the full history). When you're happy, set
-   `TELEGRAM_DRY_RUN=0` / `WHATSAPP_DRY_RUN=0` for nightly live filing.
+   `TELEGRAM_DRY_RUN=0` / `WHATSAPP_DRY_RUN=0` for nightly live filing — the
+   **per-source** switches (on the Telegram/WhatsApp settings cards): the global
+   `DRY_RUN` governs only the work digest and never takes chats live. Saving
+   applies from the next run; no restart needed.
 6. **Optional — save quota:** chat volume is the main quota driver. Point
    `TELEGRAM_LLM_*` / `WHATSAPP_LLM_*` at a cheaper or local (Ollama) model to
    keep nightly filing cheap.
@@ -312,6 +322,20 @@ fetcher exits 30 — just **Re-pair** from the Connections page.
 
 ## Operational notes
 
+- **Settings apply without a restart:** the entry scripts (`run-ingest.sh`,
+  `run-stitch.sh`, `run-weekly.sh`) re-read the live `.env` at run start
+  (`scripts/env_refresh.sh`, via the read-only `/hostro` project mount), so
+  dashboard saves and hand edits reach the very next run — nightly or manual —
+  without touching the container. Exceptions: the crontab needs a pipeline
+  restart (supercronic reads it once at startup; the dashboard offers this),
+  and always-on services (vault-qa chat, whatsapp-bridge) read their env at
+  container creation, so their settings need `docker compose up -d` on the
+  host. Deploying this mechanism itself requires one
+  `git pull && docker compose build && docker compose up -d` (a recreate — a
+  plain `docker compose restart` never applies `.env` changes).
+  CLI one-offs that override env now must name their overrides or the refresh
+  wins for keys present in `.env`:
+  `docker compose exec -e WHATSAPP_DRY_RUN=1 -e INGEST_ENV_OVERRIDES=WHATSAPP_DRY_RUN pipeline /app/scripts/run-ingest.sh whatsapp`.
 - **Updating:** run `./update.sh`. It pulls the latest code (fast-forward only — refuses
   to run with local changes), reports exactly which commits came in, flags any drift
   between `.env` and `.env.example` (missing new keys, stale dead ones), rebuilds and

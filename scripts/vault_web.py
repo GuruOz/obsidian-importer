@@ -348,8 +348,13 @@ def manage_setting(filename):
                     new_lines.append("# Added via settings UI")
                     for k in missing:
                         new_lines.append(f"{k}={updates[k]}")
-                with open(filepath, "w", encoding="utf-8") as f:
+                # Atomic swap: the pipeline's entry scripts now re-read this
+                # file at run start, so a cron run must never see a half-written
+                # .env mid-save.
+                tmp = filepath + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
                     f.write("\n".join(new_lines) + "\n")
+                os.replace(tmp, filepath)
                 return jsonify({"ok": True})
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
@@ -638,6 +643,13 @@ def _start_ingest(source, env_overrides, max_passes):
         INGEST_STATE.update(running=True, source=source, log="", exit_code=None, passes=0,
                             started=time.time(), finished=None, stop_requested=False,
                             blocked=False)
+    # Name the keys this run explicitly sets, so run-ingest.sh's .env refresh
+    # (scripts/env_refresh.sh) re-applies them on top of the freshly read file.
+    # Without this, a per-run docker-exec override is indistinguishable from
+    # stale creation-time env and would lose to .env.
+    override_keys = [e.split("=", 1)[0] for e in env_overrides]
+    if override_keys:
+        env_overrides = env_overrides + ["INGEST_ENV_OVERRIDES=" + " ".join(override_keys)]
     threading.Thread(target=_ingest_worker, args=(source, env_overrides, max_passes),
                      daemon=True).start()
     return jsonify({"ok": True})

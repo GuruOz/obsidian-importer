@@ -177,7 +177,11 @@ def main():
     )
     max_per_run = _int_env("WHATSAPP_MAX_PER_RUN", 500)
     lookback_days = max(_int_env("WHATSAPP_LOOKBACK_DAYS", 0), 0)
-    dry_run = (os.environ.get("DRY_RUN") or env("WHATSAPP_DRY_RUN", "1") or "1") == "1"
+    # Per-source switch wins over the exported global, so a live digest
+    # (DRY_RUN=0 in creation env) can never drag a standalone fetcher run live
+    # when WHATSAPP_DRY_RUN says dry. Identical under run-ingest.sh, which
+    # exports DRY_RUN already resolved from WHATSAPP_DRY_RUN.
+    dry_run = (os.environ.get("WHATSAPP_DRY_RUN") or os.environ.get("DRY_RUN") or "1") == "1"
     include_list = _list_env("WHATSAPP_INCLUDE_CHATS")
     exclude_list = _list_env("WHATSAPP_EXCLUDE_CHATS")
     include_groups = _bool_env("WHATSAPP_INCLUDE_GROUPS", True)

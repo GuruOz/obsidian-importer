@@ -16,6 +16,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NOTIFY="${SCRIPT_DIR}/notify.sh"
 
+# Pick up dashboard .env edits (e.g. STITCH_APPLY_LINKS) without a recreate.
+. "${SCRIPT_DIR}/env_refresh.sh"
+refresh_env_from_file /hostro/.env
+
 VAULT_DIR="${VAULT_DIR:-/vault}"
 WORKDIR="${WORKDIR:-/work}"
 LOG_DIR="${LOG_DIR:-/work/logs}"

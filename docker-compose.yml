@@ -35,6 +35,14 @@ services:
       # Isolated vault, managed by the standalone obsidian container above.
       - obsidian_only_vault:/vault
       - ./data:/work
+      # Live project-root overlay (read-only): entry scripts re-read /hostro/.env
+      # at run start (scripts/env_refresh.sh), so dashboard settings edits apply
+      # from the next run without recreating the container. A directory mount
+      # (not a single-file .env mount) so the dashboard's atomic write-and-rename
+      # save stays visible - a single-file bind mount would pin the old inode.
+      # env_file: above still seeds creation env for boot-time consumers and as
+      # a fallback.
+      - ./:/hostro:ro
       # The crontab and prompts are baked into the image at build time; these
       # bind-mounts overlay the live host copies so edits from the settings
       # page actually apply (prompts on the next run, crontab after a restart)

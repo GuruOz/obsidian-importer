@@ -229,10 +229,12 @@ def main():
     digest_from = (env("DIGEST_FROM", "") or "").lower()
     max_per_run = int(env("PERSONAL_MAIL_MAX_PER_RUN", "25"))
     lookback_days = read_lookback_days()
-    # run-ingest.sh exports the per-source resolved DRY_RUN; fall back to the
-    # personal default (1, safe) when run standalone. Dry runs must not persist
-    # any watermark/lookback state - see resolve_watermark().
-    dry_run = (os.environ.get("DRY_RUN") or env("PERSONAL_MAIL_DRY_RUN", "1") or "1") == "1"
+    # run-ingest.sh exports the per-source resolved DRY_RUN, but the per-source
+    # switch is checked first so a live digest (DRY_RUN=0 in creation env) can
+    # never drag a standalone fetcher run live when PERSONAL_MAIL_DRY_RUN says
+    # dry. Dry runs must not persist any watermark/lookback state - see
+    # resolve_watermark().
+    dry_run = (os.environ.get("PERSONAL_MAIL_DRY_RUN") or os.environ.get("DRY_RUN") or "1") == "1"
     window_start, window_end = read_window()
 
     os.makedirs(staging_dir, exist_ok=True)
