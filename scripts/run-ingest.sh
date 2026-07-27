@@ -135,13 +135,22 @@ LLM_MODEL="$(pref LLM_MODEL "${LLM_MODEL:-}")"
 LLM_BASE_URL="$(pref LLM_BASE_URL "${LLM_BASE_URL:-}")"
 LLM_API_KEY="$(pref LLM_API_KEY "${LLM_API_KEY:-}")"
 
+# Thinking mode and reasoning effort, also overridable per source - a high-volume
+# mechanical source can be dialled down without touching the digest. Reasoning is
+# billed as output tokens, so these are the cost dials. Blank means "use the
+# global value"; custom_agent_loop.py applies its own defaults (on, max) when both
+# are unset.
+LLM_THINKING="$(pref LLM_THINKING "${LLM_THINKING:-}")"
+LLM_REASONING_EFFORT="$(pref LLM_REASONING_EFFORT "${LLM_REASONING_EFFORT:-}")"
+
 # Agent loop budget, tunable per source (DIGEST_MAX_LOOPS / PERSONAL_MAIL_MAX_LOOPS,
 # global INGEST_MAX_LOOPS fallback, then the per-source default declared above);
 # custom_agent_loop.py reads AGENT_MAX_LOOPS.
 AGENT_MAX_LOOPS="$(pref MAX_LOOPS "${INGEST_MAX_LOOPS:-$DEF_MAX_LOOPS}")"
 
 export VAULT_DIR WORKDIR STAGING_DIR LEDGER_FILE DRY_RUN WATERMARK_FILE \
-    LLM_MODEL LLM_BASE_URL LLM_API_KEY AGENT_MAX_LOOPS
+    LLM_MODEL LLM_BASE_URL LLM_API_KEY AGENT_MAX_LOOPS \
+    LLM_THINKING LLM_REASONING_EFFORT
 
 # Optional work-date override (backfilling a specific day), same contract as before.
 WORK_DATE="${WORK_DATE_ARG:-${WORK_DATE:-}}"

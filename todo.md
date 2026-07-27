@@ -145,8 +145,13 @@ arrives via a `finish` tool call (not assistant text), which matters for streami
       chatter from before the restart is intentionally dropped). *(Batch 4)*
 
 ### 4. Performance & Token Telemetry
-- [ ] **Extended reasoning toggle** - render model reasoning in a collapsible
+- [x] **Extended reasoning toggle** - render model reasoning in a collapsible
       `<details>` block above the answer, when the backend model exposes it.
+      Streams over a `reasoning` SSE event; live-only, never persisted to the
+      transcript. Shipped alongside a thinking on/off + effort control (settings
+      page for filing, a picker beside the message box for chat), a per-provider
+      dialect layer in `scripts/llm_dialect.py`, and prompt-cache accounting
+      (`cached_tokens` / `reasoning_tokens` in the answer footer). *(Batch 5)*
 - [x] **Token & performance counters** - per-response input/output tokens and wall
       time rendered under each answer. run_loop accumulates `usage` across all API
       calls via an optional `usage_out` dict (CLI callers unaffected). *(Batch 2)*

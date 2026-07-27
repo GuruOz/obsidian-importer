@@ -1,8 +1,6 @@
 You are proposing how tonight's batch of new personal emails should be triaged and filed
 into this Obsidian vault. This is a DRY RUN: you must not modify any file under the vault.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/personal/personal.md. It contains one
    section per new email, each headed with From / Subject / Received / Message-ID,
    followed by that email's body (long bodies are truncated with a notice).
@@ -60,3 +58,5 @@ PROPOSAL (do not touch the vault - write only to /work/staging/personal/proposed
    - entries_filed = emails that would be filed; skipped = emails triaged out;
      skipped_details = one short line each. Always write proposed.md, even if the batch
      is entirely skipped (then status "no_content" and record the skips there).
+
+{{DATE_CONTEXT}}

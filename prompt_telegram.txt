@@ -1,7 +1,5 @@
 You are triaging and filing tonight's batch of Telegram chat activity into this Obsidian vault.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/telegram/telegram.md. It contains one section
    per "chat-day" - one conversation (a person, a group, or a channel) on one Singapore
    calendar date. Each section is headed:
@@ -72,3 +70,5 @@ FILING (for each chat-day section you decided to FILE):
    - sections_filed = chat-day sections actually filed; skipped = sections triaged out or
      already filed; work_dates = every date you filed under. Set status to "no_content" only
      if the whole batch was skipped (nothing filed).
+
+{{DATE_CONTEXT}}

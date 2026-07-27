@@ -25,9 +25,9 @@ def main():
     question = " ".join(sys.argv[1:]).strip()
 
     try:
-        # Chat can point at a stronger model than nightly filing via VAULT_QA_LLM_*
-        # (falls back to the global LLM_* vars).
-        client, model = cal.make_client(prefix="VAULT_QA_")
+        # Chat can point at a stronger model - or a higher reasoning effort - than
+        # nightly filing via VAULT_QA_LLM_* (falls back to the global LLM_* vars).
+        client, model, profile = cal.make_client(prefix="VAULT_QA_")
     except cal.ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
@@ -48,7 +48,8 @@ def main():
 
     print(f"Searching vault ({len(index)} notes) with {model}...", file=sys.stderr)
     try:
-        finish_args = cal.run_loop(client, model, messages, tools, handlers, max_loops=40)
+        finish_args = cal.run_loop(client, model, messages, tools, handlers, max_loops=40,
+                                   profile=profile)
     except cal.AgentAPIError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)

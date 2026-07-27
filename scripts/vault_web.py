@@ -23,6 +23,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 import custom_agent_loop as cal
 import lexical_index
+import llm_dialect
 import semantic_index
 import session_store as store
 import vault_qa
@@ -159,11 +160,22 @@ def _role(m):
     return m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
 
 
+# Extra user turns allowed to accumulate past MAX_TURNS before a trim happens.
+# Trimming shifts the message array, which invalidates the provider's prefix cache
+# from that point on; without slack the trim fires on *every* turn once the cap is
+# reached, so the cache is destroyed on every turn forever. With slack it fires
+# once every _CAP_SLACK turns instead, and history never drops below max_turns -
+# strictly more context retained than before, not less.
+_CAP_SLACK = 5
+
+
 def _cap_history(messages, max_turns):
-    """Keep messages[0] (system) plus at most the last max_turns user turns."""
+    """Keep messages[0] (system) plus at least the last max_turns user turns."""
     user_idxs = [i for i, m in enumerate(messages) if _role(m) == "user"]
-    if len(user_idxs) <= max_turns:
+    if len(user_idxs) <= max_turns + _CAP_SLACK:
         return
+    # Cut at a user-message boundary so a `tool` message is never orphaned from
+    # the assistant turn that called it - OpenAI-compatible APIs reject that.
     cutoff = user_idxs[-max_turns]
     del messages[1:cutoff]
 
@@ -1264,6 +1276,17 @@ def chat():
     if not session["lock"].acquire(blocking=False):
         return jsonify({"error": "a request is already in flight for this session"}), 409
 
+    # Per-request reasoning effort from the chat's own picker. Unlike filing - which
+    # is configured once on the settings page - a chat question's difficulty varies
+    # turn to turn, so this overrides the VAULT_QA_LLM_REASONING_EFFORT default for
+    # this request only. An unrecognized value falls back rather than 400s: the
+    # picker is a convenience, not something worth failing a question over.
+    profile = PROFILE
+    requested = (body.get("effort") or "").strip().lower()
+    if requested and requested != "default":
+        thinking, effort = llm_dialect.normalize_effort(requested, default=PROFILE.effort)
+        profile = PROFILE.with_thinking(thinking).with_effort(effort)
+
     q = queue.Queue()
     # Fresh per request, so a stale stop for a finished request can't cancel
     # this one. /api/chat/stop sets it; run_loop checks it between stream
@@ -1278,6 +1301,9 @@ def chat():
 
     def stream_cb(text):
         q.put(("delta", {"text": text}))
+
+    def reasoning_cb(text):
+        q.put(("reasoning", {"text": text}))
 
     def worker():
         t0 = time.time()
@@ -1297,7 +1323,8 @@ def chat():
             finish_args = cal.run_loop(CLIENT, MODEL, session["messages"], tools, handlers,
                                         max_loops=40, progress_cb=progress_cb,
                                         usage_out=usage, stream_cb=stream_cb,
-                                        cancel_event=cancel)
+                                        cancel_event=cancel, profile=profile,
+                                        reasoning_cb=reasoning_cb)
             if finish_args is None:
                 q.put(("error", {"message": "Exceeded maximum tool call loops"}))
             else:
@@ -1458,11 +1485,11 @@ def simulator_email():
 
 
 def _init_client():
-    global CLIENT, MODEL
+    global CLIENT, MODEL, PROFILE
     try:
-        # Chat can use a stronger model than nightly filing via VAULT_QA_LLM_*
-        # (falls back to the global LLM_* vars when unset).
-        CLIENT, MODEL = cal.make_client(prefix="VAULT_QA_")
+        # Chat can use a stronger model - or a higher reasoning effort - than
+        # nightly filing via VAULT_QA_LLM_* (falls back to the global LLM_* vars).
+        CLIENT, MODEL, PROFILE = cal.make_client(prefix="VAULT_QA_")
     except cal.ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)

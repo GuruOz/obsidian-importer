@@ -10,6 +10,7 @@ import traceback
 from datetime import datetime
 from openai import OpenAI
 
+import llm_dialect
 from tzutil import now_local
 
 # Environment setup
@@ -358,6 +359,13 @@ def render_prompt(prompt):
     of letting the agent infer it from the digest - for backfilling a specific day.
     Prompts without the placeholder (profiler, weekly rollup) pass through
     untouched, and WORK_DATE is ignored for them.
+
+    Keep {{DATE_CONTEXT}} at the *end* of the shipped prompt files. Its value is the
+    only part of a filing prompt that changes from run to run, and provider prompt
+    caches match on identical prefixes - with the placeholder near the top nothing
+    after it can ever be cached, which for a 9KB prompt is the whole thing. A
+    customized prompt that still has it near the top keeps working exactly as
+    before; it just pays full price.
     """
     if "{{DATE_CONTEXT}}" not in prompt:
         return prompt
@@ -377,10 +385,14 @@ def render_prompt(prompt):
 
 def make_client(prefix=""):
     """Build the OpenAI-compatible client from {prefix}LLM_* env vars, or raise
-    ConfigError. `prefix` lets a caller use its own endpoint while falling back
-    to the global one: e.g. make_client("VAULT_QA_") reads VAULT_QA_LLM_BASE_URL/
-    _MODEL/_API_KEY and only uses the plain LLM_* vars where those are unset - so
-    the chat can point at a stronger model than the nightly filing agent.
+    ConfigError. Returns (client, model, profile), where profile says how to ask
+    this endpoint to think (see llm_dialect).
+
+    `prefix` lets a caller use its own endpoint while falling back to the global
+    one: e.g. make_client("VAULT_QA_") reads VAULT_QA_LLM_BASE_URL/_MODEL/_API_KEY
+    /_THINKING/_REASONING_EFFORT and only uses the plain LLM_* vars where those are
+    unset - so the chat can point at a stronger model, or think harder, than the
+    nightly filing agent.
 
     LLM_API_KEY is optional so local OpenAI-compatible servers work out of the
     box - Ollama (http://host.docker.internal:11434/v1), LM Studio, llama.cpp
@@ -396,7 +408,26 @@ def make_client(prefix=""):
     if not all([base_url, model]):
         raise ConfigError("LLM_BASE_URL and LLM_MODEL must be set for custom agent "
                           "(plus LLM_API_KEY unless the endpoint is a local server like Ollama).")
-    return OpenAI(api_key=api_key, base_url=base_url), model
+
+    warning = llm_dialect.retired_model_warning(base_url, model)
+    if warning:
+        # Warn rather than raise: someone may legitimately point a self-hosted
+        # endpoint at the same model name, and failing hard would strand them.
+        _vlog(f"!! {warning}")
+
+    # LLM_THINKING is the on/off toggle; LLM_REASONING_EFFORT carries the level.
+    # "off" in either one means the same thing, so both are routed through the
+    # same normalizer and the stricter answer wins.
+    thinking_on, _ = llm_dialect.normalize_effort(_get("LLM_THINKING") or "on")
+    effort_on, effort = llm_dialect.normalize_effort(_get("LLM_REASONING_EFFORT"))
+    profile = llm_dialect.LLMProfile(
+        dialect=llm_dialect.detect(base_url),
+        thinking=thinking_on and effort_on,
+        effort=effort,
+        base_url=base_url,
+        model=model,
+    )
+    return OpenAI(api_key=api_key, base_url=base_url), model, profile
 
 
 class _AnswerExtractor:
@@ -463,31 +494,118 @@ class _AnswerExtractor:
                     pass  # streaming must never break the agent loop
 
 
+def _bump(usage_out, key, value):
+    if value:
+        usage_out[key] = usage_out.get(key, 0) + value
+
+
 def _add_usage(usage_out, usage):
-    if usage_out is not None and usage is not None:
-        usage_out["input_tokens"] = usage_out.get("input_tokens", 0) + (getattr(usage, "prompt_tokens", 0) or 0)
-        usage_out["output_tokens"] = usage_out.get("output_tokens", 0) + (getattr(usage, "completion_tokens", 0) or 0)
+    """Accumulate one response's token counts.
+
+    Beyond the plain in/out totals this tracks cached and reasoning tokens, which
+    are the two numbers that actually explain a bill: cached input is ~50x cheaper
+    than uncached on DeepSeek, and reasoning tokens are billed as *output*. Without
+    them a caching win or a thinking-mode blowout is invisible. Providers spell the
+    cache field differently (DeepSeek: prompt_cache_hit_tokens/prompt_cache_miss_tokens;
+    OpenAI and OpenRouter: prompt_tokens_details.cached_tokens), so both are read.
+    """
+    if usage_out is None or usage is None:
+        return
+    _bump(usage_out, "input_tokens", getattr(usage, "prompt_tokens", 0) or 0)
+    _bump(usage_out, "output_tokens", getattr(usage, "completion_tokens", 0) or 0)
+
+    cached = getattr(usage, "prompt_cache_hit_tokens", None)
+    if cached is None:
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", None) if details is not None else None
+    _bump(usage_out, "cached_tokens", cached or 0)
+
+    details = getattr(usage, "completion_tokens_details", None)
+    if details is not None:
+        _bump(usage_out, "reasoning_tokens", getattr(details, "reasoning_tokens", 0) or 0)
 
 
-def _stream_completion(client, model, messages, tools, cancel_event, extractor, usage_out):
+def _usage_extra(usage, d_in=None, d_cached=None, d_reasoned=None):
+    """The ', N cached in (X%), M reasoning out' tail of a token log line.
+    Empty when the provider reported neither, so non-thinking runs on endpoints
+    without caching log exactly what they used to."""
+    if d_cached is None:
+        d_in = usage.get("input_tokens", 0)
+        d_cached = usage.get("cached_tokens", 0)
+        d_reasoned = usage.get("reasoning_tokens", 0)
+    parts = ""
+    if d_cached:
+        parts += f", {d_cached} cached in ({100 * d_cached // max(d_in, 1)}%)"
+    if d_reasoned:
+        parts += f", {d_reasoned} reasoning out"
+    return parts
+
+
+# Optional request params a given (endpoint, model) has already rejected once.
+# Process-lifetime only - a restart re-probes, which is what you want after
+# switching model or upgrading a local server.
+_UNSUPPORTED = {}
+
+
+def _create_completion(client, profile, **kwargs):
+    """chat.completions.create, minus whatever this endpoint has refused before.
+
+    Providers behind the OpenAI-compatible facade disagree about which optional
+    params exist, and the only signal most of them give is a 400 naming the key.
+    So: send everything, and when a call fails complaining about one of the
+    *optional* params we added, drop that one and retry. Only keys in
+    llm_dialect.OPTIONAL_PARAMS are ever removed, so model/messages/tools survive
+    any amount of this and a genuine error (bad key, rate limit) still propagates.
+    """
+    seen = _UNSUPPORTED.setdefault((profile.base_url, profile.model) if profile else (None, None), set())
+    body = kwargs.pop("extra_body", None) or {}
+    for key in list(kwargs):
+        if key in seen:
+            kwargs.pop(key)
+    for key in list(body):
+        if key in seen:
+            body.pop(key)
+
+    while True:
+        try:
+            call_kwargs = dict(kwargs)
+            if body:
+                call_kwargs["extra_body"] = dict(body)
+            return client.chat.completions.create(**call_kwargs)
+        except Exception as e:
+            message = str(e)
+            culprit = next((p for p in llm_dialect.OPTIONAL_PARAMS
+                            if p in message and (p in kwargs or p in body)), None)
+            if culprit is None:
+                raise
+            _vlog(f"endpoint rejected optional param {culprit!r}; retrying without it")
+            seen.add(culprit)
+            kwargs.pop(culprit, None)
+            body.pop(culprit, None)
+
+
+def _stream_completion(client, model, messages, tools, cancel_event, extractor, usage_out,
+                       profile=None, reasoning_cb=None):
     """One streamed chat.completions call. Returns (assistant_msg_dict, calls,
     cancelled) where calls is [(id, name, arguments_json_str)] in index order.
-    finish-call argument deltas are fed to `extractor` as they arrive. On
-    cancellation the partial tool calls are discarded (calls comes back empty)."""
+    finish-call argument deltas are fed to `extractor` as they arrive, and any
+    reasoning text to `reasoning_cb`. On cancellation the partial tool calls are
+    discarded (calls comes back empty)."""
     kwargs = dict(model=model, messages=messages, tools=tools,
-                  tool_choice="auto", stream=True)
+                  tool_choice="auto", stream=True,
+                  stream_options={"include_usage": True})
+    if profile is not None:
+        messages = llm_dialect.apply_cache_breakpoint(messages, profile)
+        kwargs["messages"] = messages
+        extra_kwargs, extra_body = llm_dialect.reasoning_kwargs(profile)
+        kwargs.update(extra_kwargs)
+        kwargs["extra_body"] = extra_body
     try:
-        try:
-            stream = client.chat.completions.create(
-                stream_options={"include_usage": True}, **kwargs)
-        except Exception as e:
-            if "stream_options" not in str(e):
-                raise
-            stream = client.chat.completions.create(**kwargs)  # provider doesn't support it
+        stream = _create_completion(client, profile, **kwargs)
     except Exception as e:
         raise AgentAPIError(f"API Error: {e}") from e
 
-    content_parts, by_index, cancelled = [], {}, False
+    content_parts, reasoning_parts, by_index, cancelled = [], [], {}, False
     try:
         for chunk in stream:
             _add_usage(usage_out, getattr(chunk, "usage", None))
@@ -501,6 +619,14 @@ def _stream_completion(client, model, messages, tools, cancel_event, extractor, 
                 continue
             if getattr(delta, "content", None):
                 content_parts.append(delta.content)
+            reasoning = llm_dialect.reasoning_from_delta(delta)
+            if reasoning:
+                reasoning_parts.append(reasoning)
+                if reasoning_cb is not None:
+                    try:
+                        reasoning_cb(reasoning)
+                    except Exception:
+                        pass  # streaming must never break the agent loop
             for tc in (getattr(delta, "tool_calls", None) or []):
                 entry = by_index.setdefault(tc.index, {"id": None, "name": "", "arguments": ""})
                 if getattr(tc, "id", None):
@@ -529,19 +655,35 @@ def _stream_completion(client, model, messages, tools, cancel_event, extractor, 
         msg["tool_calls"] = [{"id": cid, "type": "function",
                               "function": {"name": name, "arguments": args}}
                              for cid, name, args in calls]
+        _attach_reasoning(msg, reasoning_parts, profile)
     return msg, calls, False
 
 
+def _attach_reasoning(msg, reasoning_parts, profile):
+    """Carry an assistant turn's reasoning back into the history, where required.
+
+    Only on turns that made tool calls, and only for providers that demand it -
+    DeepSeek returns HTTP 400 for a tool-calling turn whose reasoning_content was
+    dropped, and every agent path in this repo is tool-calling. Plain turns
+    deliberately don't get it: DeepSeek says they don't need it, and re-sending
+    reasoning text forever would inflate the context (and the bill) for nothing.
+    """
+    if not reasoning_parts or profile is None or not llm_dialect.echoes_reasoning(profile.dialect):
+        return
+    msg["reasoning_content"] = "".join(reasoning_parts)
+
+
 def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb=None,
-             usage_out=None, stream_cb=None, cancel_event=None):
+             usage_out=None, stream_cb=None, cancel_event=None, profile=None,
+             reasoning_cb=None):
     """Drive the tool-calling loop until the model calls `finish`.
 
     `handlers` maps tool name -> callable(args_dict) -> str. Returns the finish
     call's arguments dict, or None if max_loops was exhausted. Raises AgentAPIError
     on an LLM endpoint failure. `progress_cb(tool_name, args_dict)`, if given, is
     called right before each tool is dispatched (never allowed to break the loop).
-    `usage_out`, if given a dict, accumulates input_tokens/output_tokens across
-    every API call in the loop.
+    `usage_out`, if given a dict, accumulates input/output/cached/reasoning token
+    counts across every API call in the loop.
 
     `stream_cb(text)` and/or `cancel_event` (a threading.Event) switch the API
     calls to streaming mode: stream_cb receives the finish answer's text
@@ -549,6 +691,11 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
     the next chunk/tool boundary by raising AgentCancelled (carrying any partial
     answer text). The message history is left valid for a follow-up turn either
     way. Callers that pass neither get the original non-streaming behavior.
+
+    `profile` (an llm_dialect.LLMProfile) turns on thinking mode at the configured
+    effort and, where the provider requires it, echoes each tool-calling turn's
+    reasoning back into the history. Omitting it sends the plain request this loop
+    always sent. `reasoning_cb(text)` receives reasoning text as it streams.
     """
     use_stream = stream_cb is not None or cancel_event is not None
     extractor = _AnswerExtractor(stream_cb)
@@ -561,12 +708,14 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
 
         _vlog(f"turn {turn}/{max_loops}: calling {model} "
               f"({len(messages)} messages in context)")
-        tokens_before = (usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+        tokens_before = (usage.get("input_tokens", 0), usage.get("output_tokens", 0),
+                         usage.get("cached_tokens", 0), usage.get("reasoning_tokens", 0))
         t_llm = time.time()
 
         if use_stream:
             msg, calls, cancelled = _stream_completion(
-                client, model, messages, tools, cancel_event, extractor, usage)
+                client, model, messages, tools, cancel_event, extractor, usage,
+                profile=profile, reasoning_cb=reasoning_cb)
             if cancelled:
                 # Discard the aborted completion's partial tool calls; keep the
                 # partial answer as plain assistant text so the history stays valid.
@@ -576,26 +725,42 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
             messages.append(msg)
             content = msg.get("content")
         else:
+            call_kwargs = dict(model=model, messages=messages, tools=tools,
+                               tool_choice="auto")
+            if profile is not None:
+                call_kwargs["messages"] = llm_dialect.apply_cache_breakpoint(messages, profile)
+                extra_kwargs, extra_body = llm_dialect.reasoning_kwargs(profile)
+                call_kwargs.update(extra_kwargs)
+                call_kwargs["extra_body"] = extra_body
             try:
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto"
-                )
+                response = _create_completion(client, profile, **call_kwargs)
             except Exception as e:
                 raise AgentAPIError(f"API Error: {e}") from e
             _add_usage(usage, getattr(response, "usage", None))
-            msg = response.choices[0].message
-            messages.append(msg)
+            raw = response.choices[0].message
             calls = [(tc.id, tc.function.name, tc.function.arguments)
-                     for tc in (msg.tool_calls or [])]
-            content = msg.content
+                     for tc in (raw.tool_calls or [])]
+            content = raw.content
+            # Rebuild as a plain dict rather than appending the SDK object. The
+            # streaming path already does this, and only a dict is guaranteed to
+            # re-serialize the provider-specific reasoning_content field that
+            # DeepSeek requires back on a tool-calling turn.
+            msg = {"role": "assistant", "content": content}
+            if calls:
+                msg["tool_calls"] = [{"id": cid, "type": "function",
+                                      "function": {"name": name, "arguments": args}}
+                                     for cid, name, args in calls]
+                reasoning = llm_dialect.reasoning_from_delta(raw)
+                _attach_reasoning(msg, [reasoning] if reasoning else [], profile)
+            messages.append(msg)
 
         d_in = usage.get("input_tokens", 0) - tokens_before[0]
         d_out = usage.get("output_tokens", 0) - tokens_before[1]
+        d_cached = usage.get("cached_tokens", 0) - tokens_before[2]
+        d_reasoned = usage.get("reasoning_tokens", 0) - tokens_before[3]
+        extra = _usage_extra(usage, d_in, d_cached, d_reasoned)
         _vlog(f"turn {turn}: LLM responded in {time.time() - t_llm:.1f}s "
-              f"({d_in} in / {d_out} out tokens, {len(calls)} tool call(s))")
+              f"({d_in} in / {d_out} out tokens{extra}, {len(calls)} tool call(s))")
         if content:
             # The model's inter-tool commentary was previously invisible; it is
             # often the only clue to WHY it chose a filing target.
@@ -675,7 +840,7 @@ def run_loop(client, model, messages, tools, handlers, max_loops=30, progress_cb
 
 def main():
     try:
-        client, model = make_client()
+        client, model, profile = make_client()
     except ConfigError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
@@ -707,6 +872,8 @@ def main():
 
     _vlog(f"agent run starting: model={model} base_url={os.environ.get('LLM_BASE_URL', '')} "
           f"DRY_RUN={DRY_RUN}")
+    _vlog(f"thinking: {'on, effort=' + profile.effort if profile.thinking else 'off'} "
+          f"(dialect={profile.dialect})")
     _vlog(f"config: VAULT_DIR={VAULT_DIR} STAGING_DIR={STAGING_DIR} "
           f"prompt={prompt_file} ({len(prompt)} chars) "
           f"Filing_Rules.md={'injected, ' + str(filing_rules_chars) + ' chars' if filing_rules_chars else 'not found'}")
@@ -749,12 +916,13 @@ def main():
     t_run = time.time()
     try:
         finish_args = run_loop(client, model, messages, tools, handlers,
-                               max_loops=max_loops, usage_out=usage)
+                               max_loops=max_loops, usage_out=usage, profile=profile)
     except AgentAPIError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
     _vlog(f"agent run finished in {time.time() - t_run:.1f}s, total tokens: "
-          f"{usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out")
+          f"{usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out"
+          f"{_usage_extra(usage)}")
     if finish_args is None:
         print(json.dumps({"error": "Exceeded maximum tool call loops"}))
         sys.exit(1)

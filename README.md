@@ -81,17 +81,40 @@ endpoint with tool-calling support, e.g.:
 # DeepSeek
 LLM_BASE_URL=https://api.deepseek.com
 LLM_API_KEY=sk-...
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-v4-flash
 
 # or OpenRouter
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_MODEL=<provider/model>
 ```
 
+> DeepSeek retired the `deepseek-chat` and `deepseek-reasoner` model names on
+> 2026-07-24; they now return HTTP 400. Use `deepseek-v4-flash` (or the stronger,
+> pricier `deepseek-v4-pro`). The agent logs a warning at start-up if it sees a
+> retired name.
+
 Then `docker compose up -d` again to pick the changes up. (Pipeline runs re-read
 the live `.env` at run start, so most later edits apply on the next run without
 this — but the chat assistant's `LLM_*`/`VAULT_QA_*` settings and the WhatsApp
 bridge read theirs at container creation and do need the `up -d`.)
+
+**Thinking mode.** `LLM_THINKING=1` (the default) lets the model reason before it
+answers; `LLM_REASONING_EFFORT` picks how hard, on a `minimal | low | medium |
+high | max` ladder that is normalized per provider — DeepSeek only really
+distinguishes `high` from `max`, OpenAI stops at `high`, Ollama accepts
+`low/medium/high`, and an endpoint that has never heard of the parameter has it
+stripped automatically rather than failing the run. Both are settable from the
+dashboard's **AI Model** settings, and per source via the `PERSONAL_MAIL_` /
+`TELEGRAM_` / `WHATSAPP_` prefixes. Reasoning tokens are billed as **output**, so
+this is the main dial on what a nightly run costs. The chat assistant has its own
+effort picker next to the message box, so you can spend more on a hard question
+without changing anything global.
+
+**Prompt caching.** Nothing to configure — every provider here caches on matching
+request *prefixes*, and the prompts are laid out to give them a long stable one
+(instructions and vault index first, the changing date/time last). On DeepSeek a
+cached input token costs about 2% of an uncached one. The chat shows the hit rate
+in each answer's footer (`↑12400 (91% cached)`), and the pipeline logs it per turn.
 
 ### 5. Authenticate Microsoft Graph
 

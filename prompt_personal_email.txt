@@ -1,7 +1,5 @@
 You are triaging and filing tonight's batch of new personal emails into this Obsidian vault.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/personal/personal.md. It contains one
    section per new email, each headed with From / Subject / Received / Message-ID,
    followed by that email's body (long bodies are truncated with a notice).
@@ -64,3 +62,5 @@ FILING (for each email you decided to FILE):
    - entries_filed = emails actually filed; skipped = emails triaged out or already
      filed; skipped_details = one short line each (subject + reason). Set status to
      "no_content" only if the batch was entirely skipped (nothing filed).
+
+{{DATE_CONTEXT}}
