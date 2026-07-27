@@ -8,8 +8,6 @@ chat assistant assemble answers from half the evidence. Your job: correlate LAST
 NIGHT'S filings across sources and report the cross-links and merges a human (or a
 later live run) should apply.
 
-{{DATE_CONTEXT}}
-
 1. Read /work/staging/stitch/touched_notes.txt - the notes modified in the last 24
    hours, as "YYYY-MM-DD<TAB>path" lines, newest first, already capped. This is your
    ENTIRE scope: you correlate these notes against the vault, never the whole vault
@@ -55,3 +53,5 @@ later live run) should apply.
 8. When finished, call the finish tool with:
    {"status": "ok" | "no_content", "files_touched": ["/work/staging/stitch/proposed.md"],
     "links_added": 0, "merge_candidates": N, "audit_flags": N, "links_proposed": N}
+
+{{DATE_CONTEXT}}

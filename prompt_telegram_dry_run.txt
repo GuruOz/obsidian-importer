@@ -2,8 +2,6 @@ You are proposing how tonight's batch of Telegram chat activity WOULD be filed i
 Obsidian vault. This is a DRY RUN: you must NOT create or edit any vault note. Your only
 output file is /work/staging/telegram/proposed.md.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/telegram/telegram.md. It contains one section per
    "chat-day" - one conversation on one Singapore calendar date - headed:
      ## Chat: <name> — YYYY-MM-DD
@@ -54,3 +52,5 @@ PROPOSAL (do not touch the vault - write only to /work/staging/telegram/proposed
     "sections_filed": N, "skipped": M, "skipped_details": ["<chat> <date> — <reason>", ...]}
    - sections_filed = sections you would file; skipped = sections triaged out. Set status to
      "no_content" only if the whole batch would be skipped.
+
+{{DATE_CONTEXT}}

@@ -1,7 +1,5 @@
 You are filing tonight's M365 Copilot work-summary digest into this Obsidian vault.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/digest.md. It contains two kinds of
    sections (separated by "---"): "## Digest received <timestamp>" (a Work Log
    daily summary) and "## Ad-hoc note received <timestamp>" (a free-form work
@@ -72,3 +70,4 @@ You are filing tonight's M365 Copilot work-summary digest into this Obsidian vau
     - work_dates lists every work date you filed under (usually one; more when the
       batch contained digests for different days).
 
+{{DATE_CONTEXT}}

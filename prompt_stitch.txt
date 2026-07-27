@@ -6,8 +6,6 @@ answers from half the evidence. Your job: correlate LAST NIGHT'S filings across
 sources, apply cross-links between related notes, and report merge candidates.
 You never merge, rewrite, or delete anything.
 
-{{DATE_CONTEXT}}
-
 1. Read /work/staging/stitch/touched_notes.txt - the notes modified in the last 24
    hours, as "YYYY-MM-DD<TAB>path" lines, newest first, already capped. This is your
    ENTIRE scope: you correlate these notes against the vault, never the whole vault
@@ -61,3 +59,5 @@ You never merge, rewrite, or delete anything.
     "links_added": N, "merge_candidates": N, "audit_flags": N}
    - links_added counts appended "See also" lines (a cross-linked pair adds 2);
      files_touched lists every vault note you appended to, plus proposed.md.
+
+{{DATE_CONTEXT}}

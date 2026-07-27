@@ -1,8 +1,6 @@
 You are proposing how tonight's M365 Copilot work-summary digest should be filed into
 this Obsidian vault. This is a DRY RUN: you must not modify any file under the vault.
 
-{{DATE_CONTEXT}}
-
 1. Read the staged batch at /work/staging/digest.md. It contains two kinds of
    sections (separated by "---"): "## Digest received <timestamp>" (a Work Log
    daily summary) and "## Ad-hoc note received <timestamp>" (a free-form work
@@ -70,3 +68,4 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
     - work_dates lists every work date the proposal files under (usually one; more
       when the batch contained digests for different days).
 
+{{DATE_CONTEXT}}

@@ -178,6 +178,22 @@
   button:disabled { opacity: 0.5; cursor: default; }
   #send.stop { background: #8a3232; }
   #send.stop:hover { background: #9c3a3a; }
+  select#effort {
+    padding: 0.6rem 0.5rem; border-radius: 8px; border: 1px solid #444;
+    background: #2a2a2a; color: #aaa; font-size: 0.8rem; font-family: inherit;
+    max-width: 9.5rem; cursor: pointer;
+  }
+  select#effort:focus { outline: none; border-color: #2b5797; }
+  /* --- model reasoning (collapsed by default; it's context, not the answer) --- */
+  details.reasoning { margin: 0.35rem 0 0.5rem; border-left: 2px solid #3d5a86; padding-left: 0.6rem; }
+  details.reasoning > summary { font-size: 0.75rem; color: #8ab4f8; cursor: pointer; list-style: none; }
+  details.reasoning > summary::-webkit-details-marker { display: none; }
+  details.reasoning > summary::before { content: "▸ "; }
+  details.reasoning[open] > summary::before { content: "▾ "; }
+  .reasoning-body {
+    margin-top: 0.35rem; font-size: 0.78rem; color: #999; line-height: 1.5;
+    white-space: pre-wrap; max-height: 18rem; overflow-y: auto;
+  }
   .msg.streaming::after { content: "▍"; opacity: 0.7; animation: blink 1s step-start infinite; }
   @keyframes blink { 50% { opacity: 0; } }
 
@@ -276,6 +292,10 @@
     .fu-chip { color: #1a56b0; border-color: #9db8dd; }
     .fu-chip:hover { background: #e2ebf7; }
     textarea#input { background: #fff; color: #1a1a1a; border-color: #ccc; }
+    select#effort { background: #fafafa; color: #555; border-color: #ccc; }
+    details.reasoning { border-left-color: #9db8dd; }
+    details.reasoning > summary { color: #1a56b0; }
+    .reasoning-body { color: #666; }
     form { border-color: #ddd; }
     .md blockquote { border-color: #bbb; color: #555; }
     .md hr { border-top-color: #ddd; }
@@ -381,6 +401,15 @@
   <form id="form">
     <textarea id="input" rows="1" autocomplete="off"
               placeholder="Ask your vault anything...  (Enter to send, Shift+Enter for a new line)"></textarea>
+    <select id="effort" title="How hard the model thinks before answering. More effort costs more tokens and takes longer.">
+      <option value="default">Effort: default</option>
+      <option value="off">Effort: off</option>
+      <option value="minimal">Effort: minimal</option>
+      <option value="low">Effort: low</option>
+      <option value="medium">Effort: medium</option>
+      <option value="high">Effort: high</option>
+      <option value="max">Effort: max</option>
+    </select>
     <button id="send" type="submit">Send</button>
   </form>
 </div>
@@ -788,6 +817,7 @@ const log = document.getElementById("log");
 const form = document.getElementById("form");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
+const effortSel = document.getElementById("effort");
 const ctxBadge = document.getElementById("ctx-badge");
 const scrollBtn = document.getElementById("scroll-down");
 const sidebar = document.getElementById("sidebar");
@@ -1395,7 +1425,16 @@ function addAnswer(payload) {
 
   const metaBits = [];
   if (payload.usage && (payload.usage.input_tokens || payload.usage.output_tokens)) {
-    metaBits.push(`↑${payload.usage.input_tokens || 0} ↓${payload.usage.output_tokens || 0} tokens`);
+    const u = payload.usage;
+    // Cached input is roughly 50x cheaper than uncached, and reasoning tokens bill
+    // as output - so these two numbers are what actually explain a turn's cost.
+    let bit = `↑${u.input_tokens || 0}`;
+    if (u.cached_tokens) {
+      bit += ` (${Math.round(100 * u.cached_tokens / (u.input_tokens || 1))}% cached)`;
+    }
+    bit += ` ↓${u.output_tokens || 0}`;
+    if (u.reasoning_tokens) bit += ` 💭${u.reasoning_tokens}`;
+    metaBits.push(`${bit} tokens`);
   }
   if (payload.elapsed != null) metaBits.push(`${payload.elapsed}s`);
   if (payload.stopped) metaBits.push("⏹ stopped");
@@ -1476,10 +1515,31 @@ async function ask(payload) {
       maybeScroll();
     }
   }
+
+  // Reasoning block: collapsed, lives above the answer, and is cleared along with
+  // the rest of the streaming scaffolding when the final answer lands. It is
+  // deliberately not persisted - the transcript stores answers, not thinking.
+  let reasonDiv = null, reasonBody = null;
+  function appendReasoning(text) {
+    if (!reasonDiv) {
+      reasonDiv = document.createElement("details");
+      reasonDiv.className = "reasoning";
+      const summary = document.createElement("summary");
+      summary.textContent = "Thinking";
+      reasonBody = document.createElement("div");
+      reasonBody.className = "reasoning-body";
+      reasonDiv.append(summary, reasonBody);
+      log.appendChild(reasonDiv);
+    }
+    reasonBody.textContent += text;
+    if (reasonDiv.open) reasonBody.scrollTop = reasonBody.scrollHeight;
+    maybeScroll();
+  }
   function clearStream() {
     if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
     if (streamDiv) { streamDiv.remove(); streamDiv = null; }
     if (progressEl) { progressEl.remove(); progressEl = null; }
+    if (reasonDiv) { reasonDiv.remove(); reasonDiv = null; reasonBody = null; }
   }
 
   try {
@@ -1488,6 +1548,7 @@ async function ask(payload) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: payload.message || "",
                              regenerate: !!payload.regenerate,
+                             effort: effortSel.value,
                              session_id: sessionId }),
     });
     if (!resp.ok) {
@@ -1528,6 +1589,9 @@ async function ask(payload) {
           if (progressEl) progressEl.remove();
           const argStr = Object.values(evt.args || {}).join(" ");
           progressEl = addProgress(`${evt.tool}: ${argStr}`.trim());
+        } else if (eventType === "reasoning") {
+          if (progressEl) { progressEl.remove(); progressEl = null; }
+          appendReasoning(evt.text || "");
         } else if (eventType === "delta") {
           if (!streamDiv) {
             if (progressEl) { progressEl.remove(); progressEl = null; }
@@ -1571,6 +1635,15 @@ form.addEventListener("submit", (e) => {
   input.value = "";
   autosize();
   ask({ message: text });
+});
+
+// Effort persists across reloads but is never stored server-side: it's a property
+// of how you're asking right now, not of the session. "default" defers to
+// VAULT_QA_LLM_REASONING_EFFORT (falling back to LLM_REASONING_EFFORT) on the server.
+effortSel.value = localStorage.getItem("vault_qa_effort") || "default";
+if (!effortSel.value) effortSel.value = "default";  // stale/removed option
+effortSel.addEventListener("change", () => {
+  localStorage.setItem("vault_qa_effort", effortSel.value);
 });
 
 // --- initial load: populate sidebar and re-hydrate the last-open session ---
@@ -1684,8 +1757,8 @@ const CATEGORIES = [
 
 const LLM_PRESETS = [
   { name: "Ollama (local, free)", base: "http://host.docker.internal:11434/v1", model: "", modelHint: "e.g. qwen2.5:14b — must be pulled with `ollama pull` first" },
-  { name: "DeepSeek", base: "https://api.deepseek.com", model: "deepseek-chat" },
-  { name: "OpenRouter", base: "https://openrouter.ai/api/v1", model: "", modelHint: "e.g. deepseek/deepseek-chat" },
+  { name: "DeepSeek", base: "https://api.deepseek.com", model: "deepseek-v4-flash" },
+  { name: "OpenRouter", base: "https://openrouter.ai/api/v1", model: "", modelHint: "e.g. deepseek/deepseek-v4-flash" },
 ];
 
 const CRON_JOBS = [
@@ -1794,7 +1867,9 @@ const envSchema = {
   // AI Model
   "LLM_BASE_URL": { label: "Service address (base URL)", category: "AI Model", type: "text", default: "", desc: "The AI provider's OpenAI-compatible endpoint. Use a preset above or paste your provider's URL." },
   "LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "", desc: "From your AI provider. Leave blank for a local Ollama server — local servers don't check it." },
-  "LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "", desc: "e.g. deepseek-chat — or for Ollama, a model you've pulled, like qwen2.5:14b." },
+  "LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "", desc: "e.g. deepseek-v4-flash — or for Ollama, a model you've pulled, like qwen2.5:14b. Note: deepseek-chat and deepseek-reasoner were retired by DeepSeek on 2026-07-24 and no longer work." },
+  "LLM_THINKING": { label: "Thinking mode", category: "AI Model", type: "toggle", default: "1", desc: "Let the model reason before it answers. Better filing decisions, but reasoning is billed as output — so this is the main dial on your nightly cost. Ignored by models that can't think." },
+  "LLM_REASONING_EFFORT": { label: "Reasoning effort", category: "AI Model", type: "select", options: ["minimal", "low", "medium", "high", "max"], default: "max", desc: "How hard to think, for the nightly filing agents. Providers have different ladders and this is mapped onto each one (DeepSeek only really distinguishes high from max). The chat has its own effort picker next to the message box." },
   "PERSONAL_MAIL_LLM_BASE_URL": { label: "Base URL", category: "AI Model", type: "text", default: "", subhead: "Personal email override (optional)", desc: "Personal email can use a different AI than the work digest — e.g. keep personal mail on a local Ollama model for privacy. Leave blank to use the main model above." },
   "PERSONAL_MAIL_LLM_API_KEY": { label: "API key", category: "AI Model", type: "password", default: "" },
   "PERSONAL_MAIL_LLM_MODEL": { label: "Model name", category: "AI Model", type: "text", default: "" },

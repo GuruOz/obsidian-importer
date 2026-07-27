@@ -104,15 +104,27 @@ def _folder_cheatsheet(index):
 
 
 def build_system_prompt(index, lexical_index=None):
+    """The chat's system message: instructions, then the vault index, then the
+    current time *last*.
+
+    That ordering is deliberate and load-bearing for cost. Every provider's prompt
+    cache is prefix-based - DeepSeek's disk KV cache, OpenAI's automatic caching -
+    so a cache hit requires the request to begin with bytes identical to a previous
+    one. The timestamp used to sit at byte 0, ahead of the note index that dominates
+    this prompt's token count, which meant no part of it could ever be cached: every
+    turn of every session paid full price for the whole index.
+
+    Moving the timestamp to the tail makes everything before it a stable prefix, at
+    a cost of one 64-token cache unit. Nothing is dropped or shortened - the model
+    still gets the same instructions, the same index and the same minute-resolution
+    clock, just in an order the cache can exploit. Keep it last when editing.
+    """
     lexical_hint = (
         " search_relevant for thematic/paraphrased questions, and"
         if lexical_index is not None else ""
     )
     now = now_local()
     return (
-        f"Current date/time: {now:%Y-%m-%d %H:%M} ({now:%A}), timezone {TZ_NAME} "
-        "(as of this session's start). Use it to resolve relative dates like "
-        "\"today\", \"last week\", \"this month\".\n\n"
         "You are a read-only research assistant for a personal Obsidian vault. "
         "Answer the user's question from the vault's actual contents: shortlist candidate "
         f"notes from the index below by title and folder, Read the promising ones, use{lexical_hint} "
@@ -134,6 +146,9 @@ def build_system_prompt(index, lexical_index=None):
         "and is a likely candidate for questions about recent activity.\n"
         f"Top-level folders (note counts): {_folder_cheatsheet(index)}\n\n"
         f"Vault index ({len(index)} notes):\n" + "\n".join(_index_lines(index, now.timestamp()))
+        + f"\n\nCurrent date/time: {now:%Y-%m-%d %H:%M} ({now:%A}), timezone {TZ_NAME} "
+        "(as of this session's start). Use it to resolve relative dates like "
+        "\"today\", \"last week\", \"this month\"."
     )
 
 
