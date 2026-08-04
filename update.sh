@@ -7,11 +7,42 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 BRANCH="${UPDATE_BRANCH:-main}"
 
+# Kept in sync with EDITABLE_FILES in scripts/vault_web.py (minus .env, which is
+# gitignored so it never shows up as a working-tree change). The dashboard's
+# Settings tab writes straight to these host paths (docker-compose.yml mounts
+# ./:/host into vault-qa) so its edits apply without an image rebuild - that's
+# by design, so a live schedule/prompt tweak must not permanently block updates.
+DASHBOARD_FILES=(
+    crontab
+    prompt_template.txt
+    prompt_dry_run.txt
+    prompt_vault_profile.txt
+    prompt_weekly_rollup.txt
+    prompt_personal_email.txt
+    prompt_personal_email_dry_run.txt
+    prompt_telegram.txt
+    prompt_telegram_dry_run.txt
+    prompt_whatsapp.txt
+    prompt_whatsapp_dry_run.txt
+    prompt_stitch.txt
+    prompt_stitch_dry_run.txt
+)
+
 echo "==> Checking working tree"
-if [ -n "$(git status --porcelain)" ]; then
+UNEXPECTED="$(git status --porcelain -- . $(printf ':(exclude)%s ' "${DASHBOARD_FILES[@]}"))"
+if [ -n "$UNEXPECTED" ]; then
     echo "ERROR: local changes present. Commit, stash, or discard them before updating:" >&2
-    git status --short >&2
+    echo "$UNEXPECTED" >&2
     exit 1
+fi
+
+STASHED=0
+DASHBOARD_DIRTY="$(git status --porcelain -- "${DASHBOARD_FILES[@]}")"
+if [ -n "$DASHBOARD_DIRTY" ]; then
+    echo "==> Stashing dashboard-edited config so it survives the pull:"
+    echo "$DASHBOARD_DIRTY"
+    git stash push --quiet --message "update.sh: dashboard config" -- "${DASHBOARD_FILES[@]}"
+    STASHED=1
 fi
 
 CURRENT_BRANCH="$(git branch --show-current)"
@@ -32,6 +63,17 @@ if [ "$OLD_HEAD" = "$NEW_HEAD" ]; then
 else
     echo "==> Pulled $(git rev-list --count "$OLD_HEAD..$NEW_HEAD") commit(s):"
     git log --oneline "$OLD_HEAD..$NEW_HEAD"
+fi
+
+if [ "$STASHED" = "1" ]; then
+    echo "==> Restoring dashboard-edited config"
+    if ! git stash pop --quiet; then
+        echo "ERROR: restoring your dashboard config edits conflicted with what was pulled." >&2
+        echo "The edits are still in the stash (git stash list). Resolve manually:" >&2
+        echo "  git status && git diff" >&2
+        echo "then 'git stash drop' once you're done, and re-run this script." >&2
+        exit 1
+    fi
 fi
 
 echo "==> Checking .env against .env.example"
