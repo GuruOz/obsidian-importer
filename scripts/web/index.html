@@ -4,6 +4,12 @@
 <meta charset="utf-8">
 <title>Vault Chat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="icons/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#161616">
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -17,6 +23,9 @@
   header { padding: 0.6rem 1rem; border-bottom: 1px solid #333; font-weight: 600;
            display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   #title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #brand { display: flex; align-items: center; gap: 0.5rem; margin-right: 0.3rem; }
+  #brand img { width: 22px; height: 22px; border-radius: 6px; display: block; }
+  #brand span { font-weight: 600; letter-spacing: 0.01em; }
   #new-chat, #sb-toggle, #export-btn { font-size: 0.85rem; padding: 0.35rem 0.8rem; background: #3a3a3a; }
   #new-chat:hover, #sb-toggle:hover, #export-btn:hover { background: #454545; }
   #sb-toggle { padding: 0.35rem 0.6rem; }
@@ -378,6 +387,7 @@
 <div id="main">
 <header>
   <button id="sb-toggle" type="button" title="Toggle history sidebar">&#9776;</button>
+  <div id="brand"><img src="icons/icon-32.png" alt=""><span>Vault Chat</span></div>
   <div id="tabs">
     <span class="tab active" data-view="view-chat">Chat</span>
     <span class="tab" data-view="view-settings">Settings</span>

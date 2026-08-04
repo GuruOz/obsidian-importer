@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#222222"/>
+      <stop offset="1" stop-color="#161616"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3f74b5"/>
+      <stop offset="1" stop-color="#254a80"/>
+    </linearGradient>
+  </defs>
+
+  <!-- app-icon background -->
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+
+  <!-- chat bubble -->
+  <path d="M 128 44
+           C 74.6 44 34 79.4 34 122
+           C 34 149.9 51.2 174.1 78.3 187.4
+           C 77.1 199.4 73.1 210.4 65 220.5
+           C 64.1 221.6 65.1 223.3 66.5 223
+           C 84.9 218.9 100.4 210.8 111.3 201.4
+           C 116.7 202.2 122.3 202.6 128 202.6
+           C 181.4 202.6 222 167.2 222 124.6
+           C 222 82 181.4 44 128 44 Z"
+        fill="url(#bubble)"/>
+
+  <!-- keyhole (vault) -->
+  <circle cx="128" cy="108" r="20" fill="#eef3fa"/>
+  <path d="M 116 124 L 140 124 L 150 158 C 150 163 141 167 128 167 C 115 167 106 163 106 158 Z"
+        fill="#eef3fa"/>
+</svg>
