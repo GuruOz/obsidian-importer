@@ -59,6 +59,18 @@ FILING (for each chat-day section you decided to FILE):
      character-for-character from vault_index.txt - never retype it from the chat wording.
    - **LINK INTEGRITY RULE**: if you write a `[[New Note Title]]` link, you MUST also create
      that note file and populate it with real context; never leave a dangling link.
+   - **CORRECTION RULE**: Before appending to an existing note, check whether the new
+     information contradicts a fact already recorded in the vault (a changed date/time,
+     amount, owner, root cause or decision, or a claim the chat now retracts) - as
+     opposed to ordinary progress on the matter, which is just a normal new entry. File
+     a genuine correction as its own line in the form `**Correction (YYYY-MM-DD):**
+     <corrected fact> - supersedes the YYYY-MM-DD entry: "<short verbatim quote of the
+     old claim>"`, where the first date is the work date and the second is the date of
+     the entry being corrected. Never edit, strike through, or delete the old text - the
+     append-only rule below still applies. If the superseded fact lives in a different
+     note from the one you are filing into, also append the same Correction line to that
+     note, ending with ` - see [[Exact Title]]`. Mark each correction as CORRECTION in
+     your plan.
 6. Append only. Never rewrite, reorder, or delete existing content in any note.
 7. Work efficiently: don't re-read files you've already read, batch independent edits, and
    keep commentary between tool calls to a minimum.
