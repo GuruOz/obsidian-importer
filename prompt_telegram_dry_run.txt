@@ -43,6 +43,11 @@ PROPOSAL (do not touch the vault - write only to /work/staging/telegram/proposed
    daily note + any topic note, CREATE/UPDATE) or SKIP (reason). Then, for each
    section-to-file: name the target daily note and any topic note, CREATE or UPDATE, and the
    content that would be appended. Do not edit vault files.
+   If an entry would correct a fact already recorded in the vault (not ordinary
+   progress), mark it CORRECTION and show the line it would append, in the form
+   `**Correction (YYYY-MM-DD):** <corrected fact> - supersedes the YYYY-MM-DD entry: "<short verbatim quote of the old claim>"`,
+   plus the matching line (ending ` - see [[Exact Title]]`) if the old fact is in a
+   different note.
 7. Work efficiently: don't re-read files you've already read; keep commentary between tool
    calls to a minimum.
 8. Use your available read-only tools (read, glob, grep, search_relevant) plus write ONLY to

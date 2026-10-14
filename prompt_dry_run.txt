@@ -60,6 +60,11 @@ this Obsidian vault. This is a DRY RUN: you must not modify any file under the v
    new-note bodies may be shown in full, since they are the actual proposed text). Do not
    restate the digest separately, and do not explain reasoning unless a decision is
    genuinely ambiguous - flag only real ambiguities.
+   If an entry would correct a fact already recorded in the vault (not ordinary
+   progress), mark it CORRECTION and show the line it would append, in the form
+   `**Correction (YYYY-MM-DD):** <corrected fact> - supersedes the YYYY-MM-DD entry: "<short verbatim quote of the old claim>"`,
+   plus the matching line (ending ` - see [[Exact Title]]`) if the old fact is in a
+   different note.
 9. Work efficiently: don't re-read files you've already read, and keep commentary
    between tool calls to a minimum.
 10. Use your available tools (read, glob, grep, write) to perform this task. Do not edit vault files.
